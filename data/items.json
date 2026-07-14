@@ -1,0 +1,39 @@
+{
+  "updated_at": "승인 대기 중 — 샘플 데이터",
+  "items": [
+    {
+      "id": "sample-1",
+      "title": "1995 Alternative Rock Giant Tag T-Shirt",
+      "format": "AUCTION",
+      "price": 148.0,
+      "shipping": 9.99,
+      "currency": "USD",
+      "end_time": "2026-07-15T03:00:00Z",
+      "tag": "Giant",
+      "size": "XL",
+      "category": "band",
+      "image": "https://placehold.co/800x800?text=Sample+Auction",
+      "ebay_url": "#",
+      "defunkd_url": "",
+      "score": 84,
+      "risk": "샘플 — 실제 판정 아님"
+    },
+    {
+      "id": "sample-2",
+      "title": "2001 Movie Promo Tee Hanes Heavyweight",
+      "format": "FIXED_PRICE",
+      "price": 225.0,
+      "shipping": 0.0,
+      "currency": "USD",
+      "end_time": "",
+      "tag": "Hanes",
+      "size": "L",
+      "category": "movie",
+      "image": "https://placehold.co/800x800?text=Sample+Buy+It+Now",
+      "ebay_url": "#",
+      "defunkd_url": "https://www.defunkd.com/",
+      "score": 76,
+      "risk": "샘플 — 실제 판정 아님"
+    }
+  ]
+}

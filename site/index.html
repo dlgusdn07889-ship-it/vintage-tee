@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vintage Tee Finder</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header><div>
+<p class="eyebrow">PERSONAL BUYING DASHBOARD</p>
+<h1>Vintage Tee Finder</h1>
+<p id="updated">불러오는 중…</p>
+</div></header>
+<main>
+<section class="controls">
+<input id="search" type="search" placeholder="밴드, 영화, 태그, 제목 검색">
+<select id="format"><option value="">경매 + 즉시구매</option><option value="AUCTION">경매만</option><option value="FIXED_PRICE">즉시구매만</option></select>
+<select id="size"><option value="">모든 사이즈</option><option>L</option><option>XL</option><option>XXL</option></select>
+<select id="sort"><option value="score">추천점수 높은 순</option><option value="total">총비용 낮은 순</option></select>
+</section>
+<section class="summary"><div><strong id="count">0</strong><span>표시 매물</span></div><div><strong>AUCTION</strong><span>경매</span></div><div><strong>FIXED</strong><span>즉시구매</span></div></section>
+<section id="grid" class="grid"></section>
+</main>
+<template id="card">
+<article class="card">
+<img class="thumb" alt="">
+<div class="card-body">
+<div class="badges"><span class="format"></span><span class="score"></span></div>
+<h2></h2>
+<dl>
+<div><dt>상품가</dt><dd class="price"></dd></div>
+<div><dt>미국 배송</dt><dd class="shipping"></dd></div>
+<div><dt>총비용</dt><dd class="total"></dd></div>
+<div><dt>태그 / 사이즈</dt><dd class="tag-size"></dd></div>
+</dl>
+<p class="risk"></p>
+<div class="actions"><a class="ebay" target="_blank" rel="noopener">eBay 보기</a><a class="defunkd" target="_blank" rel="noopener">Defunkd</a></div>
+</div></article>
+</template>
+<script src="app.js"></script>
+</body></html>

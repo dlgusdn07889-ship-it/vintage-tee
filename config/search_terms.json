@@ -1,0 +1,42 @@
+{
+  "tags": [
+    "Giant",
+    "Brockum",
+    "Winterland",
+    "Changes",
+    "Anvil",
+    "Tultex",
+    "All Sport",
+    "Hanes",
+    "Fruit of the Loom",
+    "Wild Oats",
+    "Screen Stars",
+    "Oneita",
+    "Stedman",
+    "Tee Jays",
+    "Murina",
+    "Delta",
+    "Signal"
+  ],
+  "categories": [
+    "band",
+    "movie",
+    "anime",
+    "Harley-Davidson",
+    "rap",
+    "wrestling",
+    "Disney",
+    "Marvel",
+    "Nintendo"
+  ],
+  "sizes": [
+    "L",
+    "XL",
+    "XXL"
+  ],
+  "max_total_usd": 500,
+  "formats": [
+    "AUCTION",
+    "FIXED_PRICE"
+  ]
+}
