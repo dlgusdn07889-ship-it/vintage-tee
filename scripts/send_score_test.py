@@ -14,18 +14,21 @@ item_price = 65.0
 us_shipping = 8.0
 forwarding_fee = 10.0
 
-# 배대지 비용 10달러를 총액에만 자동 포함
+# 배대지 비용 10달러는 총액에만 포함
 total_usd = item_price + us_shipping + forwarding_fee
 
-item_price_krw = usd_to_krw(item_price)["krw"]
-us_shipping_krw = usd_to_krw(us_shipping)["krw"]
-total_krw = usd_to_krw(total_usd)["krw"]
+# 환율은 한 번만 불러오고 같은 환율로 전부 계산
+exchange_result = usd_to_krw(1)
+exchange_rate = exchange_result["rate"]
+
+item_price_krw = round(item_price * exchange_rate)
+us_shipping_krw = round(us_shipping * exchange_rate)
+total_krw = round(total_usd * exchange_rate)
 
 message = f"""
-🔥 빈티지 레이더
+🎯 빈티지 레이더
 
-👕 상품명
-{title}
+👕 {title}
 
 💰 상품가
 ${item_price:.2f} / 약 {item_price_krw:,}원
@@ -35,29 +38,14 @@ ${us_shipping:.2f} / 약 {us_shipping_krw:,}원
 
 💵 총 예상금액
 ${total_usd:.2f} / 약 {total_krw:,}원
-배대지 비용 $10 포함
+(배대지 $10 포함)
 
-🏷 태그
-Giant 40점
+⭐ 추천도
+★★★★★
 
-📅 연식
-1994년 20점
-
-🧵 봉제 방식
-싱글스티치 15점
-
-🌎 생산국
-미국 10점
-
-⭐ 빈티지 점수
-85 / 100
-
-🏆 등급
-S
-
-🤖 평가
+🤖 추천
 즉시 검토 추천
-"""
+""".strip()
 
 url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
@@ -71,4 +59,4 @@ response = requests.post(
 )
 
 response.raise_for_status()
-print("Telegram message sent successfully.")
+print("텔레그램 메시지 전송 성공")
