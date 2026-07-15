@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
+from exchange import usd_to_krw
+from telegram_alert import send_telegram_message
 
 
 CLIENT_ID = os.environ["EBAY_CLIENT_ID"]
@@ -362,3 +364,69 @@ if __name__ == "__main__":
                 f"- {item.get('title', '제목 없음')}"
             )
             print(f"  탈락 사유: {reason}")
+
+    # 조건 통과 매물을 텔레그램으로 전송
+    MAX_ALERTS_PER_RUN = 5
+    FORWARDING_FEE_USD = 10.0
+
+    if qualified_items:
+        alert_items = qualified_items[:MAX_ALERTS_PER_RUN]
+
+        # 환율 API는 실행당 한 번만 호출
+        exchange_rate = usd_to_krw(1)["rate"]
+
+        for item in alert_items:
+            title = item.get("title", "제목 없음")
+            price_data = item.get("price", {})
+
+            price = float(price_data.get("value", 0))
+            shipping = get_shipping_cost(item)
+
+            # 총 예상금액에는 배대지 고정비 $10 포함
+            total_usd = price + shipping + FORWARDING_FEE_USD
+
+            price_krw = round(price * exchange_rate)
+            shipping_krw = round(shipping * exchange_rate)
+            total_krw = round(total_usd * exchange_rate)
+
+            hours_left = get_hours_left(
+                item.get("itemEndDate")
+            )
+            time_left = format_time_left(hours_left)
+
+            ebay_url = item.get(
+                "itemWebUrl",
+                "링크 없음",
+            )
+
+            message = f"""
+🎯 빈티지 레이더
+
+👕 {title}
+
+💰 상품가
+${price:.2f} / 약 {price_krw:,}원
+
+🚚 미국 배송비
+${shipping:.2f} / 약 {shipping_krw:,}원
+
+💵 총 예상금액
+${total_usd:.2f} / 약 {total_krw:,}원
+(배대지 $10 포함)
+
+⏰ 남은 시간
+{time_left}
+
+🔗 eBay 바로가기
+{ebay_url}
+""".strip()
+
+            send_telegram_message(message)
+
+    else:
+        message = (
+            "🎯 빈티지 레이더\n\n"
+            "이번 검색에서는 기준을 충족한 상품 없음"
+        )
+
+        send_telegram_message(message)
