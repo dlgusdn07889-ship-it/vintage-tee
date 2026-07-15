@@ -14,7 +14,7 @@ from telegram_alert import send_telegram_message
 
 
 # =========================================================
-# 기본 경로 및 eBay 설정
+# eBay 및 프로젝트 설정
 # =========================================================
 
 CLIENT_ID = os.environ["EBAY_CLIENT_ID"]
@@ -30,79 +30,99 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 CONFIG_DIR = ROOT_DIR / "config"
 DATA_DIR = ROOT_DIR / "data"
 
-PRIORITY_KEYWORDS_PATH = CONFIG_DIR / "priority_keywords.json"
+ARTIST_DATABASE_PATH = CONFIG_DIR / "artist_database.json"
 SEARCH_PATTERNS_PATH = CONFIG_DIR / "search_patterns.json"
 EXCLUDED_KEYWORDS_PATH = CONFIG_DIR / "excluded_keywords.json"
 TAG_BRANDS_PATH = CONFIG_DIR / "tag_brands.json"
-
 SEEN_ITEMS_PATH = DATA_DIR / "seen_items.json"
 
-DEFAULT_FORWARDING_FEE_USD = 10.0
-DEFAULT_MAX_TOTAL_USD = 500.0
-DEFAULT_AUCTION_MAX_HOURS = 24.0
-DEFAULT_FIXED_PRICE_NEW_MINUTES = 20
-DEFAULT_MAX_ALERTS = 5
+# 현재는 부담 없는 매입가를 우선
+MAX_ITEM_AND_US_SHIPPING_USD = 250.0
 
-# 한 번 실행할 때 선택하는 검색어 구성
-TOP_PRIORITY_QUERY_COUNT = 9
-NORMAL_QUERY_COUNT = 1
-EXPANDED_QUERY_COUNT = 0
-BROAD_QUERY_COUNT = 0
+FORWARDING_FEE_USD = 10.0
+AUCTION_MAX_HOURS_LEFT = 24.0
+FIXED_PRICE_MAX_AGE_MINUTES = 20.0
 
+MAX_ALERTS_PER_RUN = 5
 SEARCH_LIMIT_PER_QUERY = 50
 
+# 실행당 검색 비율
+TIER_1_ARTISTS_PER_RUN = 6
+TIER_2_ARTISTS_PER_RUN = 3
+TIER_3_ARTISTS_PER_RUN = 1
+
+# 한 아티스트가 알림을 독점하지 못하게 제한
+MAX_ALERTS_PER_ARTIST = 1
+
 
 # =========================================================
-# JSON 파일 읽기
+# JSON 불러오기
 # =========================================================
 
-def load_json(
-    path: Path,
-    default: Any,
-) -> Any:
+def load_json(path: Path, default: Any) -> Any:
     if not path.exists():
+        print(f"설정 파일 없음: {path}")
         return default
 
     with path.open("r", encoding="utf-8") as file:
         return json.load(file)
 
 
-def load_all_configs() -> tuple[
+def load_configs() -> tuple[
     dict[str, Any],
     dict[str, Any],
     dict[str, Any],
     dict[str, Any],
 ]:
-    priority_config = load_json(
-        PRIORITY_KEYWORDS_PATH,
-        {},
+    artist_database = load_json(
+        ARTIST_DATABASE_PATH,
+        {
+            "tier_1": [],
+            "tier_2": [],
+            "tier_3": [],
+        },
     )
 
-    pattern_config = load_json(
+    search_patterns = load_json(
         SEARCH_PATTERNS_PATH,
-        {},
+        {
+            "top_priority_patterns": [
+                "{subject} shirt",
+                "{subject} tee",
+            ],
+            "normal_patterns": [
+                "{subject} shirt",
+                "{subject} tee",
+            ],
+        },
     )
 
-    excluded_config = load_json(
+    excluded_keywords = load_json(
         EXCLUDED_KEYWORDS_PATH,
-        {},
+        {
+            "hard_exclude": [],
+            "soft_warning": [],
+        },
     )
 
-    tag_config = load_json(
+    tag_brands = load_json(
         TAG_BRANDS_PATH,
-        {},
+        {
+            "tag_scores": {},
+            "tag_aliases": {},
+        },
     )
 
     return (
-        priority_config,
-        pattern_config,
-        excluded_config,
-        tag_config,
+        artist_database,
+        search_patterns,
+        excluded_keywords,
+        tag_brands,
     )
 
 
 # =========================================================
-# 이미 알림을 보낸 상품 저장
+# 중복 알림 기록
 # =========================================================
 
 def load_seen_item_ids() -> set[str]:
@@ -115,13 +135,10 @@ def load_seen_item_ids() -> set[str]:
 
 
 def save_seen_item_ids(item_ids: set[str]) -> None:
-    DATA_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 파일이 너무 커지지 않게 최근 일부만 보관
-    trimmed_ids = list(item_ids)[-5000:]
+    # 지나치게 커지지 않도록 최대 5,000개 보관
+    trimmed_ids = sorted(item_ids)[-5000:]
 
     with SEEN_ITEMS_PATH.open(
         "w",
@@ -136,21 +153,25 @@ def save_seen_item_ids(item_ids: set[str]) -> None:
 
 
 # =========================================================
-# 검색어 생성
+# 검색 아티스트 및 검색어 선택
 # =========================================================
 
 def pick_rotating_items(
     items: list[str],
     count: int,
     slot_number: int,
+    offset_multiplier: int,
 ) -> list[str]:
     if not items or count <= 0:
         return []
 
     count = min(count, len(items))
-    start_index = (slot_number * count) % len(items)
 
-    selected = []
+    start_index = (
+        slot_number * count * offset_multiplier
+    ) % len(items)
+
+    selected: list[str] = []
 
     for offset in range(count):
         index = (start_index + offset) % len(items)
@@ -159,139 +180,96 @@ def pick_rotating_items(
     return selected
 
 
-def combine_normal_subjects(
-    priority_config: dict[str, Any],
-) -> list[str]:
-    normal_keys = [
-        "normal_movies",
-        "normal_anime",
-        "normal_harley",
-        "normal_brands",
-    ]
-
-    subjects: list[str] = []
-
-    for key in normal_keys:
-        subjects.extend(
-            priority_config.get(key, [])
-        )
-
-    return list(dict.fromkeys(subjects))
-
-
-def build_selected_queries(
-    priority_config: dict[str, Any],
-    pattern_config: dict[str, Any],
-) -> list[str]:
-    top_subjects = priority_config.get(
-        "top_priority_bands",
-        [],
+def select_artists(
+    artist_database: dict[str, Any],
+) -> list[tuple[str, str]]:
+    # 10분마다 다음 검색 조합으로 이동
+    slot_number = int(
+        datetime.now(timezone.utc).timestamp() // 600
     )
 
-    normal_subjects = combine_normal_subjects(
-        priority_config
-    )
+    tier_1 = artist_database.get("tier_1", [])
+    tier_2 = artist_database.get("tier_2", [])
+    tier_3 = artist_database.get("tier_3", [])
 
-    expanded_subjects = priority_config.get(
-        "expanded_keywords",
-        [],
-    )
+    selected: list[tuple[str, str]] = []
 
-    top_patterns = pattern_config.get(
+    for artist in pick_rotating_items(
+        tier_1,
+        TIER_1_ARTISTS_PER_RUN,
+        slot_number,
+        1,
+    ):
+        selected.append((artist, "tier_1"))
+
+    for artist in pick_rotating_items(
+        tier_2,
+        TIER_2_ARTISTS_PER_RUN,
+        slot_number,
+        3,
+    ):
+        selected.append((artist, "tier_2"))
+
+    for artist in pick_rotating_items(
+        tier_3,
+        TIER_3_ARTISTS_PER_RUN,
+        slot_number,
+        7,
+    ):
+        selected.append((artist, "tier_3"))
+
+    random_generator = random.Random(slot_number)
+    random_generator.shuffle(selected)
+
+    return selected
+
+
+def build_queries(
+    selected_artists: list[tuple[str, str]],
+    search_patterns: dict[str, Any],
+) -> list[dict[str, str]]:
+    top_patterns = search_patterns.get(
         "top_priority_patterns",
         ["{subject} shirt"],
     )
 
-    normal_patterns = pattern_config.get(
+    normal_patterns = search_patterns.get(
         "normal_patterns",
         ["{subject} shirt"],
     )
 
-    broad_queries = pattern_config.get(
-        "broad_queries",
-        [],
-    )
-
-    # 10분마다 다른 검색어 조합을 선택
     slot_number = int(
-        datetime.now(timezone.utc).timestamp()
-        // 600
+        datetime.now(timezone.utc).timestamp() // 600
     )
 
-    selected_top = pick_rotating_items(
-        top_subjects,
-        TOP_PRIORITY_QUERY_COUNT,
-        slot_number,
-    )
+    queries: list[dict[str, str]] = []
 
-    selected_normal = pick_rotating_items(
-        normal_subjects,
-        NORMAL_QUERY_COUNT,
-        slot_number,
-    )
-
-    selected_expanded = pick_rotating_items(
-        expanded_subjects,
-        EXPANDED_QUERY_COUNT,
-        slot_number,
-    )
-
-    selected_broad = pick_rotating_items(
-        broad_queries,
-        BROAD_QUERY_COUNT,
-        slot_number,
-    )
-
-    queries: list[str] = []
-
-    for index, subject in enumerate(selected_top):
-        pattern_index = (
-            slot_number + index
-        ) % len(top_patterns)
-
-        queries.append(
-            top_patterns[pattern_index].format(
-                subject=subject
-            )
+    for index, (artist, tier) in enumerate(selected_artists):
+        patterns = (
+            top_patterns
+            if tier == "tier_1"
+            else normal_patterns
         )
 
-    for index, subject in enumerate(
-        selected_normal
-    ):
         pattern_index = (
             slot_number + index
-        ) % len(normal_patterns)
+        ) % len(patterns)
 
-        queries.append(
-            normal_patterns[pattern_index].format(
-                subject=subject
-            )
+        query = patterns[pattern_index].format(
+            subject=artist
         )
 
-    for index, subject in enumerate(
-        selected_expanded
-    ):
-        pattern_index = (
-            slot_number + index
-        ) % len(normal_patterns)
+        queries.append({
+            "artist": artist,
+            "tier": tier,
+            "query": query,
+        })
 
-        queries.append(
-            normal_patterns[pattern_index].format(
-                subject=subject
-            )
-        )
-
-    queries.extend(selected_broad)
-
-    # 분야별로 섞어서 한 분야만 몰리지 않게 함
-    random_generator = random.Random(slot_number)
-    random_generator.shuffle(queries)
-
-    return list(dict.fromkeys(queries))
+    return queries
 
 
 # =========================================================
-# eBay 인증과 요청
+# eBay 인증 및 요청
 # =========================================================
 
 def get_access_token() -> str:
@@ -303,8 +281,7 @@ def get_access_token() -> str:
                 "application/x-www-form-urlencoded",
         },
         data={
-            "grant_type":
-                "client_credentials",
+            "grant_type": "client_credentials",
             "scope":
                 "https://api.ebay.com/oauth/api_scope",
         },
@@ -323,11 +300,10 @@ def get_access_token() -> str:
     return token
 
 
-def get_headers(token: str) -> dict[str, str]:
+def ebay_headers(token: str) -> dict[str, str]:
     return {
         "Authorization": f"Bearer {token}",
-        "X-EBAY-C-MARKETPLACE-ID":
-            MARKETPLACE_ID,
+        "X-EBAY-C-MARKETPLACE-ID": MARKETPLACE_ID,
     }
 
 
@@ -336,20 +312,21 @@ def search_one_query(
     query: str,
     buying_option: str,
 ) -> list[dict[str, Any]]:
-    if buying_option == "AUCTION":
-        sort_value = "endingSoonest"
-    else:
-        sort_value = "newlyListed"
+    sort_value = (
+        "endingSoonest"
+        if buying_option == "AUCTION"
+        else "newlyListed"
+    )
 
     response = requests.get(
         SEARCH_URL,
-        headers=get_headers(token),
+        headers=ebay_headers(token),
         params={
             "q": query,
             "limit": SEARCH_LIMIT_PER_QUERY,
             "filter": (
                 f"buyingOptions:{{{buying_option}}},"
-                "price:[..500],"
+                f"price:[..{MAX_ITEM_AND_US_SHIPPING_USD}],"
                 "priceCurrency:USD"
             ),
             "sort": sort_value,
@@ -369,14 +346,11 @@ def get_item_details(
     token: str,
     item_id: str,
 ) -> dict[str, Any]:
-    encoded_item_id = quote(
-        item_id,
-        safe="",
-    )
+    encoded_item_id = quote(item_id, safe="")
 
     response = requests.get(
         f"{ITEM_URL}/{encoded_item_id}",
-        headers=get_headers(token),
+        headers=ebay_headers(token),
         timeout=30,
     )
 
@@ -386,7 +360,7 @@ def get_item_details(
 
 
 # =========================================================
-# 가격과 배송비 처리
+# 가격 및 배송비
 # =========================================================
 
 def parse_amount(
@@ -396,10 +370,7 @@ def parse_amount(
         return None, "USD"
 
     raw_value = amount_data.get("value")
-    currency = amount_data.get(
-        "currency",
-        "USD",
-    )
+    currency = amount_data.get("currency", "USD")
 
     if raw_value is None:
         return None, currency
@@ -410,9 +381,7 @@ def parse_amount(
         return None, currency
 
 
-def get_shipping_cost(
-    item: dict[str, Any],
-) -> float:
+def get_shipping_cost(item: dict[str, Any]) -> float:
     shipping_options = item.get(
         "shippingOptions",
         [],
@@ -422,12 +391,12 @@ def get_shipping_cost(
         return 0.0
 
     for option in shipping_options:
-        value, _ = parse_amount(
+        shipping_cost, _ = parse_amount(
             option.get("shippingCost")
         )
 
-        if value is not None:
-            return value
+        if shipping_cost is not None:
+            return shipping_cost
 
     return 0.0
 
@@ -435,78 +404,37 @@ def get_shipping_cost(
 def get_fixed_price(
     item: dict[str, Any],
 ) -> tuple[float | None, str]:
-    price, currency = parse_amount(
-        item.get("price")
-    )
-
-    return price, currency
+    return parse_amount(item.get("price"))
 
 
-def get_auction_price_from_summary(
+def get_auction_price(
     item: dict[str, Any],
 ) -> tuple[float | None, str, str]:
     current_bid, currency = parse_amount(
         item.get("currentBidPrice")
     )
 
-    if current_bid is not None:
-        return (
-            current_bid,
-            currency,
-            "현재 입찰가",
-        )
-
-    price, currency = parse_amount(
-        item.get("price")
-    )
-
-    if price is not None:
-        return price, currency, "시작가"
-
-    return None, "USD", "가격 확인 필요"
-
-
-def get_auction_price_from_details(
-    item: dict[str, Any],
-) -> tuple[float | None, str, str]:
-    current_bid, currency = parse_amount(
-        item.get("currentBidPrice")
-    )
-
-    if current_bid is not None:
-        return (
-            current_bid,
-            currency,
-            "현재 입찰가",
-        )
+    if current_bid is not None and current_bid > 0:
+        return current_bid, currency, "현재 입찰가"
 
     minimum_bid, currency = parse_amount(
         item.get("minimumPriceToBid")
     )
 
-    if minimum_bid is not None:
-        bid_count = int(
-            item.get("bidCount", 0) or 0
+    if minimum_bid is not None and minimum_bid > 0:
+        bid_count = int(item.get("bidCount", 0) or 0)
+
+        label = (
+            "다음 최소 입찰가"
+            if bid_count > 0
+            else "시작가"
         )
 
-        if bid_count > 0:
-            return (
-                minimum_bid,
-                currency,
-                "다음 최소 입찰가",
-            )
+        return minimum_bid, currency, label
 
-        return (
-            minimum_bid,
-            currency,
-            "시작가",
-        )
+    price, currency = parse_amount(item.get("price"))
 
-    price, currency = parse_amount(
-        item.get("price")
-    )
-
-    if price is not None:
+    if price is not None and price > 0:
         return price, currency, "시작가"
 
     return None, "USD", "가격 확인 필요"
@@ -515,28 +443,16 @@ def get_auction_price_from_details(
 def resolve_auction_price(
     token: str,
     item: dict[str, Any],
-) -> tuple[
-    float | None,
-    str,
-    str,
-    dict[str, Any],
-]:
-    price, currency, label = (
-        get_auction_price_from_summary(item)
-    )
+) -> tuple[float | None, str, str, dict[str, Any]]:
+    price, currency, label = get_auction_price(item)
 
-    if price is not None and price > 0:
+    if price is not None:
         return price, currency, label, item
 
     item_id = item.get("itemId")
 
     if not item_id:
-        return (
-            None,
-            "USD",
-            "가격 확인 필요",
-            item,
-        )
+        return None, "USD", "가격 확인 필요", item
 
     try:
         detailed_item = get_item_details(
@@ -545,48 +461,33 @@ def resolve_auction_price(
         )
     except requests.RequestException as error:
         print(
-            "상세 가격 조회 실패:",
+            "상품 상세조회 실패:",
             item.get("title", "제목 없음"),
         )
         print(error)
 
-        return (
-            None,
-            "USD",
-            "가격 확인 필요",
-            item,
-        )
+        return None, "USD", "가격 확인 필요", item
 
-    price, currency, label = (
-        get_auction_price_from_details(
-            detailed_item
-        )
+    price, currency, label = get_auction_price(
+        detailed_item
     )
 
-    return (
-        price,
-        currency,
-        label,
-        detailed_item,
-    )
+    return price, currency, label, detailed_item
 
 
 # =========================================================
-# 날짜와 시간
+# 시간 처리
 # =========================================================
 
 def parse_ebay_datetime(
-    date_value: str | None,
+    value: str | None,
 ) -> datetime | None:
-    if not date_value:
+    if not value:
         return None
 
     try:
         return datetime.fromisoformat(
-            date_value.replace(
-                "Z",
-                "+00:00",
-            )
+            value.replace("Z", "+00:00")
         )
     except ValueError:
         return None
@@ -600,10 +501,8 @@ def get_hours_left(
     if end_time is None:
         return None
 
-    now = datetime.now(timezone.utc)
-
     return (
-        end_time - now
+        end_time - datetime.now(timezone.utc)
     ).total_seconds() / 3600
 
 
@@ -615,23 +514,17 @@ def get_listing_age_minutes(
         or item.get("itemOriginDate")
     )
 
-    created_time = parse_ebay_datetime(
-        date_value
-    )
+    creation_time = parse_ebay_datetime(date_value)
 
-    if created_time is None:
+    if creation_time is None:
         return None
 
-    now = datetime.now(timezone.utc)
-
     return (
-        now - created_time
+        datetime.now(timezone.utc) - creation_time
     ).total_seconds() / 60
 
 
-def format_time_left(
-    hours_left: float | None,
-) -> str:
+def format_time_left(hours_left: float | None) -> str:
     if hours_left is None:
         return "종료시간 확인 필요"
 
@@ -639,10 +532,7 @@ def format_time_left(
         return "종료됨"
 
     total_minutes = int(hours_left * 60)
-    hours, minutes = divmod(
-        total_minutes,
-        60,
-    )
+    hours, minutes = divmod(total_minutes, 60)
 
     return f"{hours}시간 {minutes}분"
 
@@ -651,7 +541,7 @@ def format_listing_age(
     age_minutes: float | None,
 ) -> str:
     if age_minutes is None:
-        return "신규 등록"
+        return "등록시간 확인 필요"
 
     if age_minutes < 1:
         return "방금 전"
@@ -659,100 +549,86 @@ def format_listing_age(
     if age_minutes < 60:
         return f"{int(age_minutes)}분 전"
 
-    hours = int(age_minutes // 60)
-    return f"{hours}시간 전"
+    return f"{int(age_minutes // 60)}시간 전"
 
 
 # =========================================================
-# 제외 키워드와 사이즈
+# 제외 키워드 및 위험 키워드
 # =========================================================
 
-def find_hard_exclude_keyword(
-    title: str,
-    hard_excludes: list[str],
+def find_matching_keyword(
+    text: str,
+    keywords: list[str],
 ) -> str | None:
-    lower_title = title.lower()
+    lower_text = text.lower()
 
-    for keyword in hard_excludes:
-        if keyword.lower() in lower_title:
+    for keyword in keywords:
+        if keyword.lower() in lower_text:
             return keyword
 
     return None
 
 
-def find_soft_warnings(
-    title: str,
-    warning_keywords: list[str],
+def find_warning_keywords(
+    text: str,
+    keywords: list[str],
 ) -> list[str]:
-    lower_title = title.lower()
+    lower_text = text.lower()
 
     return [
         keyword
-        for keyword in warning_keywords
-        if keyword.lower() in lower_title
+        for keyword in keywords
+        if keyword.lower() in lower_text
     ]
 
 
-def has_clearly_small_size(
-    title: str,
-) -> bool:
+def has_explicit_small_size(title: str) -> bool:
     normalized = title.lower()
 
-    small_size_patterns = [
+    patterns = [
         r"\bsize\s*xs\b",
-        r"\bextra small\b",
+        r"\bextra[\s-]?small\b",
         r"\bsize\s*small\b",
         r"\bsize\s*s\b",
         r"\bmens?\s+small\b",
-        r"\bmen'?s\s+small\b",
         r"\bwomens?\s+small\b",
-        r"\bwomen'?s\s+small\b",
         r"\bladies\s+small\b",
+        r"\bgirls?\b",
     ]
 
     return any(
         re.search(pattern, normalized)
-        for pattern in small_size_patterns
+        for pattern in patterns
     )
 
 
 # =========================================================
-# 태그 감지 — 내부 계산용
+# 태그 감지 — 현재는 내부 참고용
 # =========================================================
 
-def detect_tag_brand(
+def detect_tag(
     title: str,
     tag_config: dict[str, Any],
 ) -> tuple[str | None, int]:
     lower_title = title.lower()
 
-    tag_scores = tag_config.get(
-        "tag_scores",
-        {},
-    )
-
-    aliases = tag_config.get(
-        "tag_aliases",
-        {},
-    )
+    scores = tag_config.get("tag_scores", {})
+    aliases = tag_config.get("tag_aliases", {})
 
     for alias, canonical_name in aliases.items():
         if alias.lower() in lower_title:
-            score = int(
-                tag_scores.get(
-                    canonical_name,
-                    0,
-                )
+            return (
+                canonical_name,
+                int(scores.get(canonical_name, 0)),
             )
-            return canonical_name, score
 
-    sorted_tags = sorted(
-        tag_scores.items(),
+    ordered_tags = sorted(
+        scores.items(),
         key=lambda entry: len(entry[0]),
         reverse=True,
     )
 
-    for tag_name, score in sorted_tags:
+    for tag_name, score in ordered_tags:
         if tag_name.lower() in lower_title:
             return tag_name, int(score)
 
@@ -760,35 +636,29 @@ def detect_tag_brand(
 
 
 # =========================================================
-# 경매·즉시구매 평가
+# 상품 평가
 # =========================================================
 
 def evaluate_auction(
     token: str,
     item: dict[str, Any],
+    artist: str,
+    tier: str,
     hard_excludes: list[str],
-    soft_warnings: list[str],
+    warning_keywords: list[str],
     tag_config: dict[str, Any],
-    auction_max_hours: float,
-    maximum_total_usd: float,
 ) -> tuple[bool, str, dict[str, Any]]:
     title = item.get("title", "")
 
-    excluded_keyword = (
-        find_hard_exclude_keyword(
-            title,
-            hard_excludes,
-        )
+    excluded = find_matching_keyword(
+        title,
+        hard_excludes,
     )
 
-    if excluded_keyword:
-        return (
-            False,
-            f"제외 키워드: {excluded_keyword}",
-            item,
-        )
+    if excluded:
+        return False, f"제외 키워드: {excluded}", item
 
-    if has_clearly_small_size(title):
+    if has_explicit_small_size(title):
         return False, "작은 사이즈 명확", item
 
     hours_left = get_hours_left(
@@ -796,43 +666,33 @@ def evaluate_auction(
     )
 
     if hours_left is None:
-        return False, "종료시간 없음", item
+        return False, "종료시간 확인 불가", item
 
     if hours_left <= 0:
-        return False, "이미 종료됨", item
+        return False, "종료됨", item
 
-    if hours_left > auction_max_hours:
-        return False, "종료 24시간 초과", item
+    if hours_left > AUCTION_MAX_HOURS_LEFT:
+        return False, "종료까지 24시간 초과", item
 
     (
         price,
         currency,
         price_label,
         detailed_item,
-    ) = resolve_auction_price(
-        token,
-        item,
-    )
+    ) = resolve_auction_price(token, item)
 
     if price is None or price <= 0:
-        return False, "경매 가격 확인 불가", item
+        return False, "현재 가격 확인 불가", item
 
     shipping = get_shipping_cost(item)
 
     if shipping == 0:
-        shipping = get_shipping_cost(
-            detailed_item
-        )
+        shipping = get_shipping_cost(detailed_item)
 
-    if price + shipping > maximum_total_usd:
-        return False, "$500 초과", item
+    if price + shipping > MAX_ITEM_AND_US_SHIPPING_USD:
+        return False, "예산 $250 초과", item
 
-    warning_list = find_soft_warnings(
-        title,
-        soft_warnings,
-    )
-
-    tag_name, tag_score = detect_tag_brand(
+    tag_name, tag_score = detect_tag(
         title,
         tag_config,
     )
@@ -840,6 +700,8 @@ def evaluate_auction(
     processed = dict(item)
 
     processed.update({
+        "_artist": artist,
+        "_tier": tier,
         "_listing_type": "AUCTION",
         "_price": price,
         "_currency": currency,
@@ -847,8 +709,11 @@ def evaluate_auction(
         "_shipping": shipping,
         "_hours_left": hours_left,
         "_age_minutes": None,
-        "_warnings": warning_list,
-        "_detected_tag": tag_name,
+        "_warnings": find_warning_keywords(
+            title,
+            warning_keywords,
+        ),
+        "_tag_name": tag_name,
         "_tag_score": tag_score,
     })
 
@@ -857,68 +722,55 @@ def evaluate_auction(
 
 def evaluate_fixed_price(
     item: dict[str, Any],
+    artist: str,
+    tier: str,
     hard_excludes: list[str],
-    soft_warnings: list[str],
+    warning_keywords: list[str],
     tag_config: dict[str, Any],
-    new_listing_minutes: float,
-    maximum_total_usd: float,
 ) -> tuple[bool, str, dict[str, Any]]:
     title = item.get("title", "")
 
-    excluded_keyword = (
-        find_hard_exclude_keyword(
-            title,
-            hard_excludes,
-        )
+    excluded = find_matching_keyword(
+        title,
+        hard_excludes,
     )
 
-    if excluded_keyword:
-        return (
-            False,
-            f"제외 키워드: {excluded_keyword}",
-            item,
-        )
+    if excluded:
+        return False, f"제외 키워드: {excluded}", item
 
-    if has_clearly_small_size(title):
+    if has_explicit_small_size(title):
         return False, "작은 사이즈 명확", item
 
     price, currency = get_fixed_price(item)
 
     if price is None or price <= 0:
-        return False, "즉시구매가 없음", item
+        return False, "즉시구매가 확인 불가", item
 
     shipping = get_shipping_cost(item)
 
-    if price + shipping > maximum_total_usd:
-        return False, "$500 초과", item
+    if price + shipping > MAX_ITEM_AND_US_SHIPPING_USD:
+        return False, "예산 $250 초과", item
 
     age_minutes = get_listing_age_minutes(item)
 
-    # 등록 시간이 제공되면 최근 등록 기준을 적용
     if (
         age_minutes is not None
-        and age_minutes > new_listing_minutes
+        and age_minutes > FIXED_PRICE_MAX_AGE_MINUTES
     ):
         return False, "최근 등록 상품 아님", item
 
-    warning_list = find_soft_warnings(
-        title,
-        soft_warnings,
-    )
-
-    tag_name, tag_score = detect_tag_brand(
+    tag_name, tag_score = detect_tag(
         title,
         tag_config,
     )
 
-    buying_options = item.get(
-        "buyingOptions",
-        [],
-    )
+    buying_options = item.get("buyingOptions", [])
 
     processed = dict(item)
 
     processed.update({
+        "_artist": artist,
+        "_tier": tier,
         "_listing_type": "FIXED_PRICE",
         "_price": price,
         "_currency": currency,
@@ -926,8 +778,11 @@ def evaluate_fixed_price(
         "_shipping": shipping,
         "_hours_left": None,
         "_age_minutes": age_minutes,
-        "_warnings": warning_list,
-        "_detected_tag": tag_name,
+        "_warnings": find_warning_keywords(
+            title,
+            warning_keywords,
+        ),
+        "_tag_name": tag_name,
         "_tag_score": tag_score,
         "_best_offer": (
             "BEST_OFFER" in buying_options
@@ -938,73 +793,132 @@ def evaluate_fixed_price(
 
 
 # =========================================================
-# 통합 검색
+# 모든 검색 실행
 # =========================================================
 
-def search_all_queries(
+def search_all(
     token: str,
-    queries: list[str],
+    query_entries: list[dict[str, str]],
 ) -> tuple[
     list[dict[str, Any]],
     list[dict[str, Any]],
 ]:
-    unique_auctions: dict[
-        str,
-        dict[str, Any],
-    ] = {}
+    auction_items: dict[str, dict[str, Any]] = {}
+    fixed_items: dict[str, dict[str, Any]] = {}
 
-    unique_fixed_items: dict[
-        str,
-        dict[str, Any],
-    ] = {}
-
-    for index, query in enumerate(
-        queries,
+    for index, entry in enumerate(
+        query_entries,
         start=1,
     ):
+        artist = entry["artist"]
+        tier = entry["tier"]
+        query = entry["query"]
+
         print(
-            f"[{index}/{len(queries)}] 검색: "
-            f"{query}"
+            f"[{index}/{len(query_entries)}] "
+            f"{tier} / {artist} / {query}"
         )
 
         try:
-            auction_items = search_one_query(
+            results = search_one_query(
                 token,
                 query,
                 "AUCTION",
             )
+
+            for item in results:
+                item_id = item.get("itemId")
+
+                if item_id:
+                    item["_search_artist"] = artist
+                    item["_search_tier"] = tier
+                    auction_items[item_id] = item
+
         except requests.RequestException as error:
             print(f"경매 검색 실패: {query}")
             print(error)
-            auction_items = []
 
         try:
-            fixed_items = search_one_query(
+            results = search_one_query(
                 token,
                 query,
                 "FIXED_PRICE",
             )
+
+            for item in results:
+                item_id = item.get("itemId")
+
+                if item_id:
+                    item["_search_artist"] = artist
+                    item["_search_tier"] = tier
+                    fixed_items[item_id] = item
+
         except requests.RequestException as error:
             print(f"즉시구매 검색 실패: {query}")
             print(error)
-            fixed_items = []
-
-        for item in auction_items:
-            item_id = item.get("itemId")
-
-            if item_id:
-                unique_auctions[item_id] = item
-
-        for item in fixed_items:
-            item_id = item.get("itemId")
-
-            if item_id:
-                unique_fixed_items[item_id] = item
 
     return (
-        list(unique_auctions.values()),
-        list(unique_fixed_items.values()),
+        list(auction_items.values()),
+        list(fixed_items.values()),
     )
+
+
+# =========================================================
+# 알림 정렬 및 분산
+# =========================================================
+
+def tier_weight(tier: str) -> int:
+    weights = {
+        "tier_1": 3,
+        "tier_2": 2,
+        "tier_3": 1,
+    }
+
+    return weights.get(tier, 0)
+
+
+def prepare_alert_items(
+    fixed_items: list[dict[str, Any]],
+    auction_items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    fixed_items.sort(
+        key=lambda item: (
+            -tier_weight(item.get("_tier", "")),
+            item.get("_age_minutes")
+            if item.get("_age_minutes") is not None
+            else float("inf"),
+        )
+    )
+
+    auction_items.sort(
+        key=lambda item: (
+            -tier_weight(item.get("_tier", "")),
+            item.get("_hours_left")
+            if item.get("_hours_left") is not None
+            else float("inf"),
+        )
+    )
+
+    combined = fixed_items + auction_items
+
+    selected: list[dict[str, Any]] = []
+    artist_counts: dict[str, int] = {}
+
+    for item in combined:
+        artist = item.get("_artist", "알 수 없음")
+
+        current_count = artist_counts.get(artist, 0)
+
+        if current_count >= MAX_ALERTS_PER_ARTIST:
+            continue
+
+        selected.append(item)
+        artist_counts[artist] = current_count + 1
+
+        if len(selected) >= MAX_ALERTS_PER_RUN:
+            break
+
+    return selected
 
 
 # =========================================================
@@ -1014,78 +928,66 @@ def search_all_queries(
 def build_message(
     item: dict[str, Any],
     exchange_rate: float,
-    forwarding_fee_usd: float,
 ) -> str:
     title = item.get("title", "제목 없음")
-
     listing_type = item["_listing_type"]
+
     price = float(item["_price"])
     shipping = float(item["_shipping"])
 
     total_usd = (
         price
         + shipping
-        + forwarding_fee_usd
+        + FORWARDING_FEE_USD
     )
 
     price_krw = round(price * exchange_rate)
-    shipping_krw = round(
-        shipping * exchange_rate
-    )
-    total_krw = round(
-        total_usd * exchange_rate
-    )
+    shipping_krw = round(shipping * exchange_rate)
+    total_krw = round(total_usd * exchange_rate)
 
     ebay_url = item.get(
         "itemWebUrl",
         "링크 없음",
     )
 
-    warning_list = item.get(
-        "_warnings",
-        [],
-    )
-
-    warning_text = ""
-
-    if warning_list:
-        warning_text = (
-            "\n⚠️ 주의 키워드: "
-            + ", ".join(warning_list)
-        )
-
     if listing_type == "AUCTION":
-        type_text = "🔨 경매"
-        time_text = (
+        type_line = "🔨 경매"
+        time_line = (
             "⏰ 남은 시간: "
-            + format_time_left(
-                item.get("_hours_left")
-            )
+            f"{format_time_left(item.get('_hours_left'))}"
         )
     else:
-        type_text = "⚡ 즉시구매"
-        time_text = (
-            "🕒 등록 시간: "
-            + format_listing_age(
-                item.get("_age_minutes")
-            )
-        )
+        type_line = "⚡ 즉시구매"
 
         if item.get("_best_offer"):
-            type_text += " · 가격 제안 가능"
+            type_line += " · 가격 제안 가능"
+
+        time_line = (
+            "🕒 등록 시간: "
+            f"{format_listing_age(item.get('_age_minutes'))}"
+        )
+
+    warnings = item.get("_warnings", [])
+
+    warning_line = ""
+
+    if warnings:
+        warning_line = (
+            "\n⚠️ 주의: "
+            + ", ".join(warnings)
+        )
 
     return f"""
 🎯 빈티지 레이더
 
-{type_text}
+{type_line}
 👕 {title}
 
 💰 {item["_price_label"]}: ${price:.2f} / 약 {price_krw:,}원
 🚚 미국 배송비: ${shipping:.2f} / 약 {shipping_krw:,}원
 💵 총 예상금액: ${total_usd:.2f} / 약 {total_krw:,}원
 📦 배대지 $10 포함
-
-{time_text}{warning_text}
+{time_line}{warning_line}
 
 🔗 eBay 바로가기
 {ebay_url}
@@ -1094,54 +996,40 @@ def build_message(
 
 def send_alerts(
     items: list[dict[str, Any]],
-    seen_ids: set[str],
-    maximum_alerts: int,
-    forwarding_fee_usd: float,
+    seen_item_ids: set[str],
 ) -> set[str]:
-    if not items:
+    new_items = [
+        item
+        for item in items
+        if item.get("itemId") not in seen_item_ids
+    ]
+
+    if not new_items:
         send_telegram_message(
             "🎯 빈티지 레이더\n\n"
-            "이번 검색에서는 기준을 충족한 상품 없음"
+            "이번 검색에서는 새로운 조건 충족 상품 없음"
         )
-        return seen_ids
+        return seen_item_ids
 
     exchange_result = usd_to_krw(1)
-    exchange_rate = float(
-        exchange_result["rate"]
-    )
+    exchange_rate = float(exchange_result["rate"])
 
-    sent_count = 0
-
-    for item in items:
-        if sent_count >= maximum_alerts:
-            break
-
+    for item in new_items:
         item_id = item.get("itemId")
 
         if not item_id:
             continue
 
-        if item_id in seen_ids:
-            continue
-
-        message = build_message(
-            item,
-            exchange_rate,
-            forwarding_fee_usd,
-        )
-
-        send_telegram_message(message)
-
-        seen_ids.add(item_id)
-        sent_count += 1
-
-    if sent_count == 0:
         send_telegram_message(
-            "🎯 빈티지 레이더\n\n"
-            "이번 검색에서는 새로운 조건 충족 상품 없음"
+            build_message(
+                item,
+                exchange_rate,
+            )
         )
 
-    return seen_ids
+        seen_item_ids.add(item_id)
+
+    return seen_item_ids
 
 
 # =========================================================
@@ -1150,189 +1038,139 @@ def send_alerts(
 
 def main() -> None:
     (
-        priority_config,
-        pattern_config,
-        excluded_config,
+        artist_database,
+        search_patterns,
+        excluded_keywords,
         tag_config,
-    ) = load_all_configs()
+    ) = load_configs()
 
-    selected_queries = build_selected_queries(
-        priority_config,
-        pattern_config,
+    selected_artists = select_artists(
+        artist_database
     )
 
-    hard_excludes = excluded_config.get(
+    query_entries = build_queries(
+        selected_artists,
+        search_patterns,
+    )
+
+    hard_excludes = excluded_keywords.get(
         "hard_exclude",
         [],
     )
 
-    soft_warnings = excluded_config.get(
+    warning_keywords = excluded_keywords.get(
         "soft_warning",
         [],
     )
 
-    new_listing_minutes = float(
-        pattern_config.get(
-            "fixed_price_new_listing_minutes",
-            DEFAULT_FIXED_PRICE_NEW_MINUTES,
+    print("이번 실행 검색 대상")
+    print("=" * 70)
+
+    for entry in query_entries:
+        print(
+            f"- {entry['tier']} / "
+            f"{entry['artist']} / "
+            f"{entry['query']}"
         )
-    )
 
-    auction_max_hours = float(
-        pattern_config.get(
-            "auction_max_hours_left",
-            DEFAULT_AUCTION_MAX_HOURS,
-        )
-    )
-
-    forwarding_fee_usd = float(
-        pattern_config.get(
-            "forwarding_fee_usd",
-            DEFAULT_FORWARDING_FEE_USD,
-        )
-    )
-
-    maximum_total_usd = float(
-        pattern_config.get(
-            "max_item_and_us_shipping_usd",
-            DEFAULT_MAX_TOTAL_USD,
-        )
-    )
-
-    maximum_alerts = int(
-        pattern_config.get(
-            "max_alerts_per_run",
-            DEFAULT_MAX_ALERTS,
-        )
-    )
-
-    print("이번 실행 검색어:")
-    print("=" * 60)
-
-    for query in selected_queries:
-        print(f"- {query}")
-
-    print("=" * 60)
+    print("=" * 70)
 
     token = get_access_token()
 
-    auctions, fixed_items = search_all_queries(
+    auctions, fixed_items = search_all(
         token,
-        selected_queries,
+        query_entries,
     )
 
-    print(f"검색된 경매: {len(auctions)}개")
-    print(
-        f"검색된 즉시구매: "
-        f"{len(fixed_items)}개"
-    )
-
-    qualified_auctions = []
-    qualified_fixed_items = []
-
-    rejected_count = 0
+    qualified_auctions: list[dict[str, Any]] = []
+    qualified_fixed: list[dict[str, Any]] = []
 
     for item in auctions:
-        passed, reason, processed = (
-            evaluate_auction(
-                token,
-                item,
-                hard_excludes,
-                soft_warnings,
-                tag_config,
-                auction_max_hours,
-                maximum_total_usd,
-            )
+        artist = item.get(
+            "_search_artist",
+            "알 수 없음",
+        )
+
+        tier = item.get(
+            "_search_tier",
+            "tier_3",
+        )
+
+        passed, reason, processed = evaluate_auction(
+            token,
+            item,
+            artist,
+            tier,
+            hard_excludes,
+            warning_keywords,
+            tag_config,
         )
 
         if passed:
-            qualified_auctions.append(
-                processed
-            )
+            qualified_auctions.append(processed)
         else:
-            rejected_count += 1
             print(
-                "경매 탈락:",
-                item.get("title", "제목 없음"),
-                "/",
-                reason,
+                f"경매 탈락 / {artist} / "
+                f"{reason} / "
+                f"{item.get('title', '제목 없음')}"
             )
 
     for item in fixed_items:
-        passed, reason, processed = (
-            evaluate_fixed_price(
-                item,
-                hard_excludes,
-                soft_warnings,
-                tag_config,
-                new_listing_minutes,
-                maximum_total_usd,
-            )
+        artist = item.get(
+            "_search_artist",
+            "알 수 없음",
+        )
+
+        tier = item.get(
+            "_search_tier",
+            "tier_3",
+        )
+
+        passed, reason, processed = evaluate_fixed_price(
+            item,
+            artist,
+            tier,
+            hard_excludes,
+            warning_keywords,
+            tag_config,
         )
 
         if passed:
-            qualified_fixed_items.append(
-                processed
-            )
+            qualified_fixed.append(processed)
         else:
-            rejected_count += 1
             print(
-                "즉시구매 탈락:",
-                item.get("title", "제목 없음"),
-                "/",
-                reason,
+                f"즉시구매 탈락 / {artist} / "
+                f"{reason} / "
+                f"{item.get('title', '제목 없음')}"
             )
 
-    # 즉시구매는 최신순
-    qualified_fixed_items.sort(
-        key=lambda item: (
-            item.get("_age_minutes")
-            if item.get("_age_minutes")
-            is not None
-            else 0
-        )
+    alert_items = prepare_alert_items(
+        qualified_fixed,
+        qualified_auctions,
     )
 
-    # 경매는 종료 임박순
-    qualified_auctions.sort(
-        key=lambda item: (
-            item.get("_hours_left")
-            if item.get("_hours_left")
-            is not None
-            else float("inf")
-        )
-    )
-
-    # 즉시구매를 먼저 보여주고 경매를 이어서 표시
-    combined_items = (
-        qualified_fixed_items
-        + qualified_auctions
-    )
-
-    print("=" * 60)
-    print(
-        f"통과한 즉시구매: "
-        f"{len(qualified_fixed_items)}개"
-    )
+    print("=" * 70)
+    print(f"검색된 경매: {len(auctions)}개")
+    print(f"검색된 즉시구매: {len(fixed_items)}개")
     print(
         f"통과한 경매: "
         f"{len(qualified_auctions)}개"
     )
-    print(f"탈락: {rejected_count}개")
-    print("=" * 60)
+    print(
+        f"통과한 즉시구매: "
+        f"{len(qualified_fixed)}개"
+    )
+    print(f"알림 후보: {len(alert_items)}개")
+    print("=" * 70)
 
-    seen_ids = load_seen_item_ids()
+    seen_item_ids = load_seen_item_ids()
 
-    updated_seen_ids = send_alerts(
-        combined_items,
-        seen_ids,
-        maximum_alerts,
-        forwarding_fee_usd,
+    updated_ids = send_alerts(
+        alert_items,
+        seen_item_ids,
     )
 
-    save_seen_item_ids(
-        updated_seen_ids
-    )
+    save_seen_item_ids(updated_ids)
 
 
 if __name__ == "__main__":
