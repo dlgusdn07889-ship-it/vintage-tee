@@ -59,6 +59,9 @@ TIER_3_ARTISTS_PER_RUN = 1
 MAX_ALERTS_PER_ARTIST = 1
 
 
+MIN_ASKING_DISCOUNT_PERCENT = 30.0
+
+
 # =========================================================
 # JSON 불러오기
 # =========================================================
@@ -1137,6 +1140,35 @@ def add_market_references(
     return items
 
 
+def filter_undervalued_items(
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """현재 호가 중앙값보다 최소 기준 이상 저렴한 매물만 남긴다."""
+    filtered: list[dict[str, Any]] = []
+
+    for item in items:
+        discount = item.get("_asking_discount_percent")
+
+        if discount is None:
+            print(
+                "호가 비교 제외 / 참고값 없음 / "
+                f"{item.get('title', '제목 없음')}"
+            )
+            continue
+
+        if float(discount) < MIN_ASKING_DISCOUNT_PERCENT:
+            print(
+                "호가 비교 탈락 / "
+                f"{float(discount):.1f}% / "
+                f"{item.get('title', '제목 없음')}"
+            )
+            continue
+
+        filtered.append(item)
+
+    return filtered
+
+
 # =========================================================
 # 텔레그램 메시지
 # =========================================================
@@ -1389,6 +1421,10 @@ def main() -> None:
 
     alert_items = add_market_references(
         token,
+        alert_items,
+    )
+
+    alert_items = filter_undervalued_items(
         alert_items,
     )
 
