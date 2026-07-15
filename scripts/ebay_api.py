@@ -87,6 +87,23 @@ def get_access_token() -> str:
     return response.json()["access_token"]
 
 
+def get_item_price(item: dict) -> tuple[float, str]:
+    price_data = (
+        item.get("currentBidPrice")
+        or item.get("price")
+        or {}
+    )
+
+    try:
+        price = float(price_data.get("value", 0))
+    except (TypeError, ValueError):
+        price = 0.0
+
+    currency = price_data.get("currency", "USD")
+
+    return price, currency
+
+
 def get_shipping_cost(item: dict) -> float:
     shipping_options = item.get("shippingOptions", [])
 
@@ -170,12 +187,10 @@ def is_qualified_item(
     if not has_allowed_size(title):
         return False, "L~XXL 사이즈 확인 불가"
 
-    price_data = item.get("price", {})
+    price, _ = get_item_price(item)
 
-    try:
-        price = float(price_data.get("value", 0))
-    except (TypeError, ValueError):
-        return False, "가격 정보 오류"
+    if price <= 0:
+        return False, "현재 입찰가 정보 없음"
 
     shipping = get_shipping_cost(item)
     total = price + shipping
@@ -323,10 +338,7 @@ if __name__ == "__main__":
         start=1,
     ):
         title = item.get("title", "제목 없음")
-        price_data = item.get("price", {})
-
-        price = float(price_data.get("value", 0))
-        currency = price_data.get("currency", "USD")
+        price, currency = get_item_price(item)
         shipping = get_shipping_cost(item)
         total = price + shipping
 
