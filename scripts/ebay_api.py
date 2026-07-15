@@ -49,7 +49,7 @@ MAX_ITEM_AND_US_SHIPPING_USD = 250.0
 
 FORWARDING_FEE_USD = 10.0
 AUCTION_MAX_HOURS_LEFT = 24.0
-FIXED_PRICE_MAX_AGE_MINUTES = 180.0
+FIXED_PRICE_MAX_AGE_MINUTES = 20.0
 
 MAX_ALERTS_PER_RUN = 5
 SEARCH_LIMIT_PER_QUERY = 50
@@ -1095,6 +1095,48 @@ def prepare_alert_items(
 # 현재 eBay 호가 참고값
 # =========================================================
 
+REFERENCE_STOP_WORDS = {
+    "vintage", "shirt", "tee", "tshirt", "t-shirt", "band", "tour",
+    "concert", "single", "stitch", "mens", "men", "size", "large",
+    "xl", "xxl", "rare", "official", "original", "black", "graphic",
+    "usa", "made", "the", "and", "for", "with", "from", "1990s", "90s",
+}
+
+
+def build_reference_query(item: dict[str, Any]) -> str:
+    """
+    아티스트명만 쓰지 않고 상품 제목의 고유 단어를 일부 포함해
+    더 비슷한 현재 판매 매물과 비교한다.
+    """
+    artist = str(item.get("_artist", "")).strip()
+    title = str(item.get("title", ""))
+
+    normalized_title = normalize_search_text(title)
+    normalized_artist = normalize_search_text(artist)
+
+    artist_tokens = set(normalized_artist.split())
+    candidate_tokens: list[str] = []
+
+    for token in normalized_title.split():
+        if token in artist_tokens:
+            continue
+        if token in REFERENCE_STOP_WORDS:
+            continue
+        if len(token) < 3:
+            continue
+        if re.fullmatch(r"19\d{2}|20\d{2}", token):
+            continue
+        if token not in candidate_tokens:
+            candidate_tokens.append(token)
+
+    distinctive_tokens = candidate_tokens[:3]
+
+    if distinctive_tokens:
+        return " ".join([artist, *distinctive_tokens, "shirt"])
+
+    return f"{artist} vintage shirt"
+
+
 def add_market_references(
     token: str,
     items: list[dict[str, Any]],
@@ -1109,7 +1151,7 @@ def add_market_references(
             item["_market_reference"] = None
             continue
 
-        query = f"{artist} vintage shirt"
+        query = build_reference_query(item)
 
         if query not in reference_cache:
             try:
