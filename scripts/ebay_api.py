@@ -689,7 +689,7 @@ def evaluate_auction(
     if price is None or price <= 0:
         return False, "현재 가격 확인 불가", item
 
-        shipping = get_shipping_cost(item)
+    shipping = get_shipping_cost(item)
 
     if shipping is None:
         shipping = get_shipping_cost(detailed_item)
