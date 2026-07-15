@@ -3,9 +3,20 @@ name: Search eBay Auctions
 on:
   workflow_dispatch:
 
+  schedule:
+    - cron: "*/10 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vintage-radar-search
+  cancel-in-progress: false
+
 jobs:
   search:
     runs-on: ubuntu-latest
+    timeout-minutes: 9
 
     steps:
       - name: 저장소 불러오기
@@ -16,10 +27,18 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: requests 설치
+      - name: 필요한 프로그램 설치
         run: pip install requests
 
-      - name: 실제 eBay 경매 검색
+      - name: 기존 알림 기록 불러오기
+        uses: actions/cache@v4
+        with:
+          path: data/seen_items.json
+          key: vintage-radar-seen-${{ github.run_id }}
+          restore-keys: |
+            vintage-radar-seen-
+
+      - name: 빈티지 레이더 실행
         env:
           EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
           EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
