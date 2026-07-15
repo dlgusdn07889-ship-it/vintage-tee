@@ -673,6 +673,104 @@ def detect_tag(
     return None, 0
 
 
+
+# =========================================================
+# 검색 정확도 및 내부 우선순위
+# =========================================================
+
+ARTIST_ALIASES: dict[str, list[str]] = {
+    "ACDC": ["AC/DC", "AC DC"],
+    "Guns N Roses": ["Guns N' Roses", "Guns N Roses", "GNR"],
+    "Mötley Crüe": ["Motley Crue", "Mötley Crüe"],
+    "Motorhead": ["Motörhead", "Motorhead"],
+    "Notorious BIG": ["The Notorious B.I.G.", "Notorious BIG", "Biggie Smalls"],
+    "NWA": ["N.W.A.", "NWA"],
+    "Run DMC": ["Run-D.M.C.", "Run DMC"],
+    "Wu-Tang Clan": ["Wu-Tang Clan", "Wu Tang Clan", "Wu-Tang"],
+    "Tupac": ["Tupac", "2Pac", "Makaveli"],
+    "Red Hot Chili Peppers": ["Red Hot Chili Peppers", "RHCP"],
+    "Rage Against the Machine": ["Rage Against the Machine", "RATM"],
+    "Nine Inch Nails": ["Nine Inch Nails", "NIN"],
+    "Stone Temple Pilots": ["Stone Temple Pilots", "STP"],
+    "Alice in Chains": ["Alice in Chains", "AIC"],
+}
+
+
+def normalize_search_text(value: str) -> str:
+    normalized = value.lower().replace("&", " and ")
+    normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+    return " ".join(normalized.split())
+
+
+def title_matches_artist(title: str, artist: str) -> bool:
+    normalized_title = normalize_search_text(title)
+    aliases = ARTIST_ALIASES.get(artist, [artist])
+
+    for alias in aliases:
+        normalized_alias = normalize_search_text(alias)
+        if normalized_alias and normalized_alias in normalized_title:
+            return True
+
+    return False
+
+
+def extract_listing_year(title: str) -> int | None:
+    matches = re.findall(r"\b(?:19\d{2}|20\d{2})\b", title)
+    if not matches:
+        return None
+
+    years = [int(value) for value in matches]
+    plausible = [year for year in years if 1970 <= year <= 2030]
+    return min(plausible) if plausible else None
+
+
+def calculate_quality_score(item: dict[str, Any]) -> int:
+    title = item.get("title", "").lower()
+    tier = item.get("_tier", "tier_3")
+    score = {"tier_1": 30, "tier_2": 20, "tier_3": 10}.get(tier, 0)
+
+    year = extract_listing_year(title)
+    if year is not None:
+        if 1980 <= year <= 1999:
+            score += 20
+        elif 2000 <= year <= 2005:
+            score += 5
+        elif year >= 2006:
+            score -= 15
+
+    score += min(int(item.get("_tag_score", 0)) // 2, 20)
+
+    if "vintage" in title or "old" in title:
+        score += 8
+    if "single stitch" in title or "single-stitch" in title:
+        score += 10
+    if "made in usa" in title or "made in u.s.a" in title:
+        score += 5
+    if "tour" in title or "concert" in title:
+        score += 5
+
+    warnings = item.get("_warnings", [])
+    score -= min(len(warnings) * 8, 24)
+
+    total_before_forwarding = float(item.get("_price", 0)) + float(
+        item.get("_shipping", 0)
+    )
+    if total_before_forwarding <= 100:
+        score += 10
+    elif total_before_forwarding <= 175:
+        score += 5
+
+    if item.get("_listing_type") == "FIXED_PRICE":
+        age = item.get("_age_minutes")
+        if age is not None and age <= 10:
+            score += 5
+    else:
+        hours = item.get("_hours_left")
+        if hours is not None and hours <= 6:
+            score += 5
+
+    return max(score, 0)
+
 # =========================================================
 # 상품 평가
 # =========================================================
@@ -687,6 +785,9 @@ def evaluate_auction(
     tag_config: dict[str, Any],
 ) -> tuple[bool, str, dict[str, Any]]:
     title = item.get("title", "")
+
+    if not title_matches_artist(title, artist):
+        return False, "검색 아티스트와 제목 불일치", item
 
     excluded = find_matching_keyword(
         title,
@@ -758,6 +859,7 @@ def evaluate_auction(
         "_tag_name": tag_name,
         "_tag_score": tag_score,
     })
+    processed["_quality_score"] = calculate_quality_score(processed)
 
     return True, "통과", processed
 
@@ -772,6 +874,9 @@ def evaluate_fixed_price(
     tag_config: dict[str, Any],
 ) -> tuple[bool, str, dict[str, Any]]:
     title = item.get("title", "")
+
+    if not title_matches_artist(title, artist):
+        return False, "검색 아티스트와 제목 불일치", item
 
     excluded = find_matching_keyword(
         title,
@@ -837,6 +942,7 @@ def evaluate_fixed_price(
             "BEST_OFFER" in buying_options
         ),
     })
+    processed["_quality_score"] = calculate_quality_score(processed)
 
     return True, "통과", processed
 
@@ -932,6 +1038,7 @@ def prepare_alert_items(
 ) -> list[dict[str, Any]]:
     fixed_items.sort(
         key=lambda item: (
+            -int(item.get("_quality_score", 0)),
             -tier_weight(item.get("_tier", "")),
             item.get("_age_minutes")
             if item.get("_age_minutes") is not None
@@ -941,6 +1048,7 @@ def prepare_alert_items(
 
     auction_items.sort(
         key=lambda item: (
+            -int(item.get("_quality_score", 0)),
             -tier_weight(item.get("_tier", "")),
             item.get("_hours_left")
             if item.get("_hours_left") is not None
