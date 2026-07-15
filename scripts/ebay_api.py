@@ -34,6 +34,13 @@ ITEM_URL = "https://api.ebay.com/buy/browse/v1/item"
 
 MARKETPLACE_ID = "EBAY_US"
 
+RADAR_MODE = os.environ.get("RADAR_MODE", "ALL").upper()
+
+if RADAR_MODE not in {"ALL", "AUCTION", "FIXED_PRICE"}:
+    raise ValueError(
+        "RADAR_MODE must be ALL, AUCTION, or FIXED_PRICE"
+    )
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 CONFIG_DIR = ROOT_DIR / "config"
 DATA_DIR = ROOT_DIR / "data"
@@ -42,14 +49,14 @@ ARTIST_DATABASE_PATH = CONFIG_DIR / "artist_database.json"
 SEARCH_PATTERNS_PATH = CONFIG_DIR / "search_patterns.json"
 EXCLUDED_KEYWORDS_PATH = CONFIG_DIR / "excluded_keywords.json"
 TAG_BRANDS_PATH = CONFIG_DIR / "tag_brands.json"
-SEEN_ITEMS_PATH = DATA_DIR / "seen_items.json"
+SEEN_ITEMS_PATH = DATA_DIR / f"seen_items_{RADAR_MODE.lower()}.json"
 
 # 현재는 부담 없는 매입가를 우선
 MAX_ITEM_AND_US_SHIPPING_USD = 250.0
 
 FORWARDING_FEE_USD = 10.0
 AUCTION_MAX_HOURS_LEFT = 24.0
-FIXED_PRICE_MAX_AGE_MINUTES = 180.0
+FIXED_PRICE_MAX_AGE_MINUTES = 20.0
 
 MAX_ALERTS_PER_RUN = 5
 SEARCH_LIMIT_PER_QUERY = 50
@@ -918,12 +925,6 @@ def evaluate_fixed_price(
 
     age_minutes = get_listing_age_minutes(item)
 
-    if (
-        age_minutes is not None
-        and age_minutes > FIXED_PRICE_MAX_AGE_MINUTES
-    ):
-        return False, "최근 등록 상품 아님", item
-
     tag_name, tag_score = detect_tag(
         title,
         tag_config,
@@ -985,43 +986,45 @@ def search_all(
             f"{tier} / {artist} / {query}"
         )
 
-        try:
-            results = search_one_query(
-                token,
-                query,
-                "AUCTION",
-            )
+        if RADAR_MODE in {"ALL", "AUCTION"}:
+            try:
+                results = search_one_query(
+                    token,
+                    query,
+                    "AUCTION",
+                )
 
-            for item in results:
-                item_id = item.get("itemId")
+                for item in results:
+                    item_id = item.get("itemId")
 
-                if item_id:
-                    item["_search_artist"] = artist
-                    item["_search_tier"] = tier
-                    auction_items[item_id] = item
+                    if item_id:
+                        item["_search_artist"] = artist
+                        item["_search_tier"] = tier
+                        auction_items[item_id] = item
 
-        except requests.RequestException as error:
-            print(f"경매 검색 실패: {query}")
-            print(error)
+            except requests.RequestException as error:
+                print(f"경매 검색 실패: {query}")
+                print(error)
 
-        try:
-            results = search_one_query(
-                token,
-                query,
-                "FIXED_PRICE",
-            )
+        if RADAR_MODE in {"ALL", "FIXED_PRICE"}:
+            try:
+                results = search_one_query(
+                    token,
+                    query,
+                    "FIXED_PRICE",
+                )
 
-            for item in results:
-                item_id = item.get("itemId")
+                for item in results:
+                    item_id = item.get("itemId")
 
-                if item_id:
-                    item["_search_artist"] = artist
-                    item["_search_tier"] = tier
-                    fixed_items[item_id] = item
+                    if item_id:
+                        item["_search_artist"] = artist
+                        item["_search_tier"] = tier
+                        fixed_items[item_id] = item
 
-        except requests.RequestException as error:
-            print(f"즉시구매 검색 실패: {query}")
-            print(error)
+            except requests.RequestException as error:
+                print(f"즉시구매 검색 실패: {query}")
+                print(error)
 
     return (
         list(auction_items.values()),
@@ -1419,6 +1422,7 @@ def main() -> None:
         [],
     )
 
+    print(f"실행 모드: {RADAR_MODE}")
     print("이번 실행 검색 대상")
     print("=" * 70)
 
