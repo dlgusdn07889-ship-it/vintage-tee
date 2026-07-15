@@ -11,6 +11,10 @@ import requests
 
 from exchange import usd_to_krw
 from telegram_alert import send_telegram_message
+from market_reference import (
+    calculate_listing_discount,
+    get_active_price_reference,
+)
 
 
 # =========================================================
@@ -1078,6 +1082,61 @@ def prepare_alert_items(
     return selected
 
 
+
+
+# =========================================================
+# 현재 eBay 호가 참고값
+# =========================================================
+
+def add_market_references(
+    token: str,
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """알림 후보에 한해서 현재 즉시구매 호가 중앙값을 붙인다."""
+    reference_cache: dict[str, dict[str, Any] | None] = {}
+
+    for item in items:
+        artist = str(item.get("_artist", "")).strip()
+
+        if not artist:
+            item["_market_reference"] = None
+            continue
+
+        query = f"{artist} vintage shirt"
+
+        if query not in reference_cache:
+            try:
+                reference_cache[query] = get_active_price_reference(
+                    token=token,
+                    query=query,
+                    maximum_results=50,
+                )
+            except requests.RequestException as error:
+                print(f"호가 참고값 조회 실패: {query}")
+                print(error)
+                reference_cache[query] = None
+
+        reference = reference_cache[query]
+        item["_market_reference"] = reference
+
+        if reference is None:
+            item["_asking_discount_percent"] = None
+            continue
+
+        total_cost = (
+            float(item.get("_price", 0))
+            + float(item.get("_shipping", 0))
+            + FORWARDING_FEE_USD
+        )
+
+        item["_asking_discount_percent"] = calculate_listing_discount(
+            total_cost=total_cost,
+            reference_median=float(reference["median"]),
+        )
+
+    return items
+
+
 # =========================================================
 # 텔레그램 메시지
 # =========================================================
@@ -1134,6 +1193,27 @@ def build_message(
             + ", ".join(warnings)
         )
 
+    reference = item.get("_market_reference")
+    discount_percent = item.get("_asking_discount_percent")
+    reference_lines = ""
+
+    if reference is not None:
+        median_usd = float(reference["median"])
+        median_krw = round(median_usd * exchange_rate)
+        sample_count = int(reference["sample_count"])
+
+        reference_lines = (
+            f"\n📊 현재 호가 중앙값: ${median_usd:.2f} "
+            f"/ 약 {median_krw:,}원 ({sample_count}건)"
+        )
+
+        if discount_percent is not None:
+            reference_lines += (
+                f"\n💸 현재 호가 대비: {discount_percent:.1f}% 저렴"
+                if discount_percent >= 0
+                else f"\n💸 현재 호가 대비: {abs(discount_percent):.1f}% 비쌈"
+            )
+
     return f"""
 🎯 빈티지 레이더
 
@@ -1144,7 +1224,7 @@ def build_message(
 🚚 미국 배송비: ${shipping:.2f} / 약 {shipping_krw:,}원
 💵 총 예상금액: ${total_usd:.2f} / 약 {total_krw:,}원
 📦 배대지 $10 포함
-{time_line}{warning_line}
+{time_line}{reference_lines}{warning_line}
 
 🔗 eBay 바로가기
 {ebay_url}
@@ -1305,6 +1385,11 @@ def main() -> None:
     alert_items = prepare_alert_items(
         qualified_fixed,
         qualified_auctions,
+    )
+
+    alert_items = add_market_references(
+        token,
+        alert_items,
     )
 
     print("=" * 70)
