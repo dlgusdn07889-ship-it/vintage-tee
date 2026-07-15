@@ -1,0 +1,55 @@
+{
+  "top_priority_patterns": [
+    "{subject} shirt",
+    "{subject} tee",
+    "{subject} t shirt",
+    "{subject} t-shirt",
+    "{subject} tshirt",
+    "{subject} vintage shirt",
+    "{subject} vintage tee",
+    "{subject} old shirt",
+    "{subject} old band shirt",
+    "{subject} tour shirt",
+    "{subject} tour tee",
+    "{subject} concert shirt",
+    "{subject} concert tee",
+    "{subject} graphic tee",
+    "{subject} single stitch"
+  ],
+
+  "normal_patterns": [
+    "{subject} shirt",
+    "{subject} tee",
+    "{subject} t shirt",
+    "{subject} t-shirt",
+    "{subject} vintage shirt",
+    "{subject} vintage tee",
+    "{subject} old shirt",
+    "{subject} graphic tee",
+    "{subject} single stitch"
+  ],
+
+  "broad_queries": [
+    "old band shirt",
+    "old band tee",
+    "vintage band shirt",
+    "vintage rock tee",
+    "vintage metal shirt",
+    "old concert shirt",
+    "old tour tee",
+    "single stitch band shirt",
+    "old movie shirt",
+    "vintage movie tee",
+    "old horror movie shirt",
+    "old anime shirt",
+    "vintage anime tee",
+    "old Harley shirt",
+    "vintage Harley tee"
+  ],
+
+  "fixed_price_new_listing_minutes": 20,
+  "auction_max_hours_left": 24,
+  "forwarding_fee_usd": 10,
+  "max_item_and_us_shipping_usd": 500,
+  "max_alerts_per_run": 5
+}
