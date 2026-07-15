@@ -44,4 +44,13 @@ jobs:
           EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python scripts/ebay_api.py
+        run: python scripts/ebay_api.py | tee latest_run.log
+
+      - name: 진단 로그 저장
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vintage-radar-latest-log
+          path: latest_run.log
+          retention-days: 7
+        
