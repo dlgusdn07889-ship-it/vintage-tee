@@ -304,6 +304,9 @@ def ebay_headers(token: str) -> dict[str, str]:
     return {
         "Authorization": f"Bearer {token}",
         "X-EBAY-C-MARKETPLACE-ID": MARKETPLACE_ID,
+        "X-EBAY-C-ENDUSERCTX": (
+            "contextualLocation=country%3DUS%2Czip%3D97250"
+        ),
     }
 
 
@@ -381,14 +384,16 @@ def parse_amount(
         return None, currency
 
 
-def get_shipping_cost(item: dict[str, Any]) -> float:
+def get_shipping_cost(
+    item: dict[str, Any],
+) -> float | None:
     shipping_options = item.get(
         "shippingOptions",
         [],
     )
 
     if not isinstance(shipping_options, list):
-        return 0.0
+        return None
 
     for option in shipping_options:
         shipping_cost, _ = parse_amount(
@@ -398,7 +403,7 @@ def get_shipping_cost(item: dict[str, Any]) -> float:
         if shipping_cost is not None:
             return shipping_cost
 
-    return 0.0
+    return None
 
 
 def get_fixed_price(
@@ -684,10 +689,13 @@ def evaluate_auction(
     if price is None or price <= 0:
         return False, "현재 가격 확인 불가", item
 
-    shipping = get_shipping_cost(item)
+        shipping = get_shipping_cost(item)
 
-    if shipping == 0:
+    if shipping is None:
         shipping = get_shipping_cost(detailed_item)
+
+    if shipping is None:
+        return False, "미국 배송비 확인 불가", item
 
     if price + shipping > MAX_ITEM_AND_US_SHIPPING_USD:
         return False, "예산 $250 초과", item
