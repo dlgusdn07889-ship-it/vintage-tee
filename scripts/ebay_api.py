@@ -406,6 +406,39 @@ def get_shipping_cost(
     return None
 
 
+def resolve_shipping_cost(
+    token: str,
+    item: dict[str, Any],
+    detailed_item: dict[str, Any] | None = None,
+) -> tuple[float | None, dict[str, Any]]:
+    """미국 배대지 ZIP 기준 배송비를 최대한 안전하게 확인한다."""
+    shipping = get_shipping_cost(item)
+
+    if shipping is not None:
+        return shipping, detailed_item or item
+
+    if detailed_item is not None:
+        shipping = get_shipping_cost(detailed_item)
+        if shipping is not None:
+            return shipping, detailed_item
+
+    item_id = item.get("itemId")
+    if not item_id:
+        return None, detailed_item or item
+
+    try:
+        fetched_details = get_item_details(token, item_id)
+    except requests.RequestException as error:
+        print(
+            "배송비 상세조회 실패:",
+            item.get("title", "제목 없음"),
+        )
+        print(error)
+        return None, detailed_item or item
+
+    return get_shipping_cost(fetched_details), fetched_details
+
+
 def get_fixed_price(
     item: dict[str, Any],
 ) -> tuple[float | None, str]:
@@ -689,10 +722,11 @@ def evaluate_auction(
     if price is None or price <= 0:
         return False, "현재 가격 확인 불가", item
 
-    shipping = get_shipping_cost(item)
-
-    if shipping is None:
-        shipping = get_shipping_cost(detailed_item)
+    shipping, detailed_item = resolve_shipping_cost(
+        token,
+        item,
+        detailed_item,
+    )
 
     if shipping is None:
         return False, "미국 배송비 확인 불가", item
@@ -729,6 +763,7 @@ def evaluate_auction(
 
 
 def evaluate_fixed_price(
+    token: str,
     item: dict[str, Any],
     artist: str,
     tier: str,
@@ -754,7 +789,13 @@ def evaluate_fixed_price(
     if price is None or price <= 0:
         return False, "즉시구매가 확인 불가", item
 
-    shipping = get_shipping_cost(item)
+    shipping, detailed_item = resolve_shipping_cost(
+        token,
+        item,
+    )
+
+    if shipping is None:
+        return False, "미국 배송비 확인 불가", item
 
     if price + shipping > MAX_ITEM_AND_US_SHIPPING_USD:
         return False, "예산 $250 초과", item
@@ -1135,6 +1176,7 @@ def main() -> None:
         )
 
         passed, reason, processed = evaluate_fixed_price(
+            token,
             item,
             artist,
             tier,
