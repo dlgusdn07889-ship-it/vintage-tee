@@ -1,0 +1,55 @@
+name: Vintage Radar - Fixed Price
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/10 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vintage-radar-fixed-price
+  cancel-in-progress: false
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 저장소 불러오기
+        uses: actions/checkout@v4
+
+      - name: 파이썬 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 필요한 프로그램 설치
+        run: pip install requests
+
+      - name: 기존 즉시구매 알림 기록 불러오기
+        uses: actions/cache@v4
+        with:
+          path: data/seen_items_fixed_price.json
+          key: vintage-radar-fixed-${{ github.run_id }}
+          restore-keys: |
+            vintage-radar-fixed-
+
+      - name: 즉시구매 레이더 실행
+        env:
+          RADAR_MODE: FIXED_PRICE
+          EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
+          EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scripts/ebay_api.py | tee fixed_price_run.log
+
+      - name: 즉시구매 진단 로그 저장
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vintage-radar-fixed-price-log
+          path: fixed_price_run.log
+          retention-days: 7
