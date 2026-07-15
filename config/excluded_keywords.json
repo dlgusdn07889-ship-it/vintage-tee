@@ -1,0 +1,36 @@
+{
+  "hard_exclude": [
+    "reprint",
+    "reproduction",
+    "replica",
+    "fake",
+    "modern",
+    "dry rot",
+    "dryrot",
+    "kids",
+    "kid's",
+    "youth",
+    "child",
+    "children",
+    "toddler",
+    "baby",
+    "infant",
+    "women's small",
+    "womens small",
+    "ladies small",
+    "girls"
+  ],
+
+  "soft_warning": [
+    "bootleg",
+    "custom",
+    "homemade",
+    "unofficial",
+    "inspired",
+    "style",
+    "reworked",
+    "cut off",
+    "cropped",
+    "sleeveless"
+  ]
+}
