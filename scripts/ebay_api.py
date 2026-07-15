@@ -14,6 +14,7 @@ CLIENT_SECRET = os.environ["EBAY_CLIENT_SECRET"]
 
 TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
 SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+ITEM_URL = "https://api.ebay.com/buy/browse/v1/item"
 
 MAX_TOTAL_USD = 500
 MAX_HOURS_LEFT = 24
@@ -102,6 +103,40 @@ def get_item_price(item: dict) -> tuple[float, str]:
     currency = price_data.get("currency", "USD")
 
     return price, currency
+
+
+def get_item_details(token: str, item_id: str) -> dict:
+    response = requests.get(
+        f"{ITEM_URL}/{item_id}",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+        },
+        timeout=30,
+    )
+
+    response.raise_for_status()
+    return response.json()
+
+
+def get_item_price(item: dict) -> tuple[float | None, str]:
+    price_data = (
+        item.get("currentBidPrice")
+        or item.get("minimumPriceToBid")
+        or item.get("price")
+        or {}
+    )
+
+    try:
+        value = price_data.get("value")
+
+        if value is None:
+            return None, "USD"
+
+        return float(value), price_data.get("currency", "USD")
+
+    except (TypeError, ValueError):
+        return None, "USD"
 
 
 def get_shipping_cost(item: dict) -> float:
@@ -338,7 +373,30 @@ if __name__ == "__main__":
         start=1,
     ):
         title = item.get("title", "제목 없음")
-        price, currency = get_item_price(item)
+        item_id = item.get("itemId", "")
+detailed_item = item
+
+if item_id:
+    try:
+        detailed_item = get_item_details(
+            access_token,
+            item_id,
+        )
+    except requests.RequestException as error:
+        print(f"상품 상세 가격 조회 실패: {title}")
+        print(error)
+
+price, currency = get_item_price(detailed_item)
+
+if price is None:
+    price_text = "가격 확인 필요"
+    price_krw_text = ""
+    price_for_total = 0.0
+else:
+    price_krw = round(price * exchange_rate)
+    price_text = f"${price:.2f}"
+    price_krw_text = f" / 약 {price_krw:,}원"
+    price_for_total = price
         shipping = get_shipping_cost(item)
         total = price + shipping
 
@@ -395,7 +453,7 @@ if __name__ == "__main__":
             shipping = get_shipping_cost(item)
 
             # 총 예상금액에는 배대지 고정비 $10 포함
-            total_usd = price + shipping + FORWARDING_FEE_USD
+            total_usd = price_for_total + shipping + FORWARDING_FEE_USD
 
             price_krw = round(price * exchange_rate)
             shipping_krw = round(shipping * exchange_rate)
@@ -417,7 +475,7 @@ if __name__ == "__main__":
 👕 {title}
 
 💰 상품가
-${price:.2f} / 약 {price_krw:,}원
+{price_text}{price_krw_text}
 
 🚚 미국 배송비
 ${shipping:.2f} / 약 {shipping_krw:,}원
