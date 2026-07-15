@@ -20,7 +20,6 @@
     "custom made",
     "unofficial",
     "bootleg reprint",
-
     "gildan",
     "gildan heavy cotton",
     "gildan ultra cotton",
@@ -31,11 +30,9 @@
     "port and company",
     "port & company",
     "jerzees dri-power",
-
     "dry rot",
     "dryrot",
     "dry-rotted",
-
     "kids",
     "kid's",
     "youth",
@@ -45,7 +42,6 @@
     "baby",
     "infant",
     "girls",
-
     "poster",
     "print only",
     "patch",
@@ -61,10 +57,17 @@
     "book",
     "photo",
     "photograph",
+    "hoodie",
+    "hooded sweatshirt",
+    "crewneck sweatshirt",
+    "sweatshirt",
+    "hat",
+    "cap",
+    "beanie",
     "jacket"
   ],
-
   "soft_warning": [
+    "bootleg",
     "parking lot",
     "custom",
     "homemade",
@@ -73,9 +76,15 @@
     "cut off",
     "sleeveless",
     "distressed",
+    "holes",
+    "hole",
     "stain",
     "stained",
+    "faded",
+    "fade",
     "single stitch style",
+    "no tag",
     "tag removed",
+    "tag cut"
   ]
 }
