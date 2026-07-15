@@ -15,6 +15,10 @@ from market_reference import (
     calculate_listing_discount,
     get_active_price_reference,
 )
+from deal_evaluator import (
+    calculate_expected_profit,
+    classify_deal,
+)
 
 
 # =========================================================
@@ -1132,10 +1136,27 @@ def add_market_references(
             + FORWARDING_FEE_USD
         )
 
-        item["_asking_discount_percent"] = calculate_listing_discount(
+        discount_percent = calculate_listing_discount(
             total_cost=total_cost,
             reference_median=float(reference["median"]),
         )
+
+        expected_profit_usd = calculate_expected_profit(
+            reference_median=float(reference["median"]),
+            total_purchase_cost=total_cost,
+        )
+
+        deal_result = classify_deal(
+            discount_percent=discount_percent,
+            expected_profit_usd=expected_profit_usd,
+            sample_count=int(reference["sample_count"]),
+        )
+
+        item["_asking_discount_percent"] = discount_percent
+        item["_expected_profit_usd"] = expected_profit_usd
+        item["_deal_rating"] = deal_result["rating"]
+        item["_deal_label"] = deal_result["label"]
+        item["_should_alert"] = bool(deal_result["should_alert"])
 
     return items
 
@@ -1143,7 +1164,7 @@ def add_market_references(
 def filter_undervalued_items(
     items: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """현재 호가 중앙값보다 최소 기준 이상 저렴한 매물만 남긴다."""
+    """30% 이상 저렴하고 비교 표본이 충분한 매물만 남긴다."""
     filtered: list[dict[str, Any]] = []
 
     for item in items:
@@ -1156,15 +1177,24 @@ def filter_undervalued_items(
             )
             continue
 
-        if float(discount) < MIN_ASKING_DISCOUNT_PERCENT:
+        if not item.get("_should_alert", False):
             print(
-                "호가 비교 탈락 / "
+                "딜 평가 탈락 / "
                 f"{float(discount):.1f}% / "
+                f"{item.get('_deal_label', '기준 미달')} / "
                 f"{item.get('title', '제목 없음')}"
             )
             continue
 
         filtered.append(item)
+
+    filtered.sort(
+        key=lambda item: (
+            -float(item.get("_asking_discount_percent", 0)),
+            -float(item.get("_expected_profit_usd", 0)),
+            -int(item.get("_quality_score", 0)),
+        )
+    )
 
     return filtered
 
@@ -1227,6 +1257,9 @@ def build_message(
 
     reference = item.get("_market_reference")
     discount_percent = item.get("_asking_discount_percent")
+    expected_profit_usd = item.get("_expected_profit_usd")
+    deal_rating = item.get("_deal_rating", "")
+    deal_label = item.get("_deal_label", "")
     reference_lines = ""
 
     if reference is not None:
@@ -1241,9 +1274,21 @@ def build_message(
 
         if discount_percent is not None:
             reference_lines += (
-                f"\n💸 현재 호가 대비: {discount_percent:.1f}% 저렴"
-                if discount_percent >= 0
-                else f"\n💸 현재 호가 대비: {abs(discount_percent):.1f}% 비쌈"
+                f"\n💸 현재 호가 대비: {float(discount_percent):.1f}% 저렴"
+            )
+
+        if expected_profit_usd is not None:
+            expected_profit_krw = round(
+                float(expected_profit_usd) * exchange_rate
+            )
+            reference_lines += (
+                f"\n📈 예상 차익: ${float(expected_profit_usd):.2f} "
+                f"/ 약 {expected_profit_krw:,}원"
+            )
+
+        if deal_rating:
+            reference_lines += (
+                f"\n⭐ 추천도: {deal_rating} · {deal_label}"
             )
 
     return f"""
