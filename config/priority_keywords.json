@@ -117,31 +117,9 @@
     "Princess Mononoke"
   ],
 
-  "normal_harley": [
-    "Harley Davidson",
-    "Harley-Davidson",
-    "Sturgis",
-    "Daytona Bike Week",
-    "Easyriders"
-  ],
+  "normal_harley": [],
 
-  "normal_brands": [
-    "Marlboro",
-    "Camel",
-    "Budweiser",
-    "Jack Daniels",
-    "Coca Cola",
-    "Pepsi",
-    "Nike"
-  ],
+  "normal_brands": [],
 
-  "expanded_keywords": [
-    "NASCAR",
-    "WWF",
-    "WWE",
-    "NBA",
-    "Disney",
-    "Apple",
-    "IBM"
-  ]
+  "expanded_keywords": []
 }
