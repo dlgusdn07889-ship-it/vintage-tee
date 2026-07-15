@@ -447,13 +447,11 @@ else:
 
         for item in alert_items:
             title = item.get("title", "제목 없음")
-            price_data = item.get("price", {})
 
-            price = float(price_data.get("value", 0))
+            price, currency = get_item_price(item)
             shipping = get_shipping_cost(item)
 
-            # 총 예상금액에는 배대지 고정비 $10 포함
-            total_usd = price_for_total + shipping + FORWARDING_FEE_USD
+            total_usd = price + shipping + FORWARDING_FEE_USD
 
             price_krw = round(price * exchange_rate)
             shipping_krw = round(shipping * exchange_rate)
@@ -474,8 +472,8 @@ else:
 
 👕 {title}
 
-💰 상품가
-{price_text}{price_krw_text}
+💰 현재 입찰가
+${price:.2f} / 약 {price_krw:,}원
 
 🚚 미국 배송비
 ${shipping:.2f} / 약 {shipping_krw:,}원
