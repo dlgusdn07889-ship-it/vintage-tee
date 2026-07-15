@@ -3,11 +3,18 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
+from urllib.parse import quote
 
 import requests
+
 from exchange import usd_to_krw
 from telegram_alert import send_telegram_message
 
+
+# ─────────────────────────────────────────────
+# 기본 설정
+# ─────────────────────────────────────────────
 
 CLIENT_ID = os.environ["EBAY_CLIENT_ID"]
 CLIENT_SECRET = os.environ["EBAY_CLIENT_SECRET"]
@@ -16,24 +23,43 @@ TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
 SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
 ITEM_URL = "https://api.ebay.com/buy/browse/v1/item"
 
-MAX_TOTAL_USD = 500
-MAX_HOURS_LEFT = 24
+MARKETPLACE_ID = "EBAY_US"
+
+MAX_TOTAL_USD = 500.0
+MAX_HOURS_LEFT = 24.0
+FORWARDING_FEE_USD = 10.0
+MAX_ALERTS_PER_RUN = 5
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT_DIR / "config" / "search_terms.json"
 
+SIZE_PATTERNS = [
+    r"\bL\b",
+    r"\bLARGE\b",
+    r"\bXL\b",
+    r"\bX[\s-]?LARGE\b",
+    r"\bEXTRA[\s-]?LARGE\b",
+    r"\bXXL\b",
+    r"\b2XL\b",
+    r"\b2X\b",
+]
 
-def load_search_config() -> dict:
+
+# ─────────────────────────────────────────────
+# 설정 파일 및 검색어
+# ─────────────────────────────────────────────
+
+def load_search_config() -> dict[str, Any]:
     with CONFIG_PATH.open("r", encoding="utf-8") as file:
         return json.load(file)
 
 
-def create_all_queries(config: dict) -> list[str]:
+def create_all_queries(config: dict[str, Any]) -> list[str]:
     subjects = config.get("subjects", [])
     templates = config.get("query_templates", [])
     broad_queries = config.get("broad_queries", [])
 
-    queries = []
+    queries: list[str] = []
 
     for subject in subjects:
         for template in templates:
@@ -41,7 +67,7 @@ def create_all_queries(config: dict) -> list[str]:
 
     queries.extend(broad_queries)
 
-    # 같은 검색어가 중복으로 들어갔을 경우 제거
+    # 순서를 유지하면서 중복 제거
     return list(dict.fromkeys(queries))
 
 
@@ -52,23 +78,30 @@ def select_query_batch(
     if not queries:
         return []
 
-    # 실행 시각에 따라 검색 구간을 자동으로 변경
-    current_hour_number = int(
+    if queries_per_run <= 0:
+        return []
+
+    # 매시간 다른 구간의 검색어를 선택
+    hour_number = int(
         datetime.now(timezone.utc).timestamp() // 3600
     )
 
     start_index = (
-        current_hour_number * queries_per_run
+        hour_number * queries_per_run
     ) % len(queries)
 
-    selected = []
+    selected: list[str] = []
 
-    for offset in range(queries_per_run):
+    for offset in range(min(queries_per_run, len(queries))):
         index = (start_index + offset) % len(queries)
         selected.append(queries[index])
 
     return selected
 
+
+# ─────────────────────────────────────────────
+# eBay 인증 및 API 호출
+# ─────────────────────────────────────────────
 
 def get_access_token() -> str:
     response = requests.post(
@@ -85,179 +118,30 @@ def get_access_token() -> str:
     )
 
     response.raise_for_status()
-    return response.json()["access_token"]
+
+    access_token = response.json().get("access_token")
+
+    if not access_token:
+        raise RuntimeError("eBay 액세스 토큰이 반환되지 않았습니다.")
+
+    return access_token
 
 
-def get_item_price(item: dict) -> tuple[float, str]:
-    price_data = (
-        item.get("currentBidPrice")
-        or item.get("price")
-        or {}
-    )
-
-    try:
-        price = float(price_data.get("value", 0))
-    except (TypeError, ValueError):
-        price = 0.0
-
-    currency = price_data.get("currency", "USD")
-
-    return price, currency
-
-
-def get_item_details(token: str, item_id: str) -> dict:
-    response = requests.get(
-        f"{ITEM_URL}/{item_id}",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
-        },
-        timeout=30,
-    )
-
-    response.raise_for_status()
-    return response.json()
-
-
-def get_item_price(item: dict) -> tuple[float | None, str]:
-    price_data = (
-        item.get("currentBidPrice")
-        or item.get("minimumPriceToBid")
-        or item.get("price")
-        or {}
-    )
-
-    try:
-        value = price_data.get("value")
-
-        if value is None:
-            return None, "USD"
-
-        return float(value), price_data.get("currency", "USD")
-
-    except (TypeError, ValueError):
-        return None, "USD"
-
-
-def get_shipping_cost(item: dict) -> float:
-    shipping_options = item.get("shippingOptions", [])
-
-    if not shipping_options:
-        return 0.0
-
-    shipping_cost = shipping_options[0].get("shippingCost", {})
-
-    try:
-        return float(shipping_cost.get("value", 0))
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def get_hours_left(end_date: str | None) -> float | None:
-    if not end_date:
-        return None
-
-    end_time = datetime.fromisoformat(
-        end_date.replace("Z", "+00:00")
-    )
-    now = datetime.now(timezone.utc)
-
-    return (end_time - now).total_seconds() / 3600
-
-
-def format_time_left(hours_left: float | None) -> str:
-    if hours_left is None:
-        return "종료시간 정보 없음"
-
-    if hours_left <= 0:
-        return "종료됨"
-
-    hours = int(hours_left)
-    minutes = int((hours_left - hours) * 60)
-
-    return f"{hours}시간 {minutes}분"
-
-
-def has_allowed_size(title: str) -> bool:
-    normalized = title.upper()
-
-    size_patterns = [
-        r"\bL\b",
-        r"\bLARGE\b",
-        r"\bXL\b",
-        r"\bX-LARGE\b",
-        r"\bEXTRA LARGE\b",
-        r"\bXXL\b",
-        r"\b2XL\b",
-        r"\b2X\b",
-    ]
-
-    return any(
-        re.search(pattern, normalized)
-        for pattern in size_patterns
-    )
-
-
-def has_excluded_keyword(
-    title: str,
-    exclude_keywords: list[str],
-) -> bool:
-    lower_title = title.lower()
-
-    return any(
-        keyword.lower() in lower_title
-        for keyword in exclude_keywords
-    )
-
-
-def is_qualified_item(
-    item: dict,
-    exclude_keywords: list[str],
-) -> tuple[bool, str]:
-    title = item.get("title", "")
-
-    if has_excluded_keyword(title, exclude_keywords):
-        return False, "제외 키워드 포함"
-
-    if not has_allowed_size(title):
-        return False, "L~XXL 사이즈 확인 불가"
-
-    price, _ = get_item_price(item)
-
-    if price <= 0:
-        return False, "현재 입찰가 정보 없음"
-
-    shipping = get_shipping_cost(item)
-    total = price + shipping
-
-    if total > MAX_TOTAL_USD:
-        return False, "상품가+미국 배송비 $500 초과"
-
-    hours_left = get_hours_left(item.get("itemEndDate"))
-
-    if hours_left is None:
-        return False, "종료시간 정보 없음"
-
-    if hours_left <= 0:
-        return False, "이미 종료됨"
-
-    if hours_left > MAX_HOURS_LEFT:
-        return False, "종료까지 24시간 이상"
-
-    return True, "통과"
+def ebay_headers(token: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {token}",
+        "X-EBAY-C-MARKETPLACE-ID": MARKETPLACE_ID,
+    }
 
 
 def search_one_query(
     token: str,
     query: str,
     limit: int = 200,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     response = requests.get(
         SEARCH_URL,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
-        },
+        headers=ebay_headers(token),
         params={
             "q": query,
             "limit": limit,
@@ -279,8 +163,8 @@ def search_one_query(
 def search_multiple_queries(
     token: str,
     queries: list[str],
-) -> list[dict]:
-    unique_items = {}
+) -> list[dict[str, Any]]:
+    unique_items: dict[str, dict[str, Any]] = {}
 
     for index, query in enumerate(queries, start=1):
         print(f"[{index}/{len(queries)}] 검색 중: {query}")
@@ -304,7 +188,391 @@ def search_multiple_queries(
     return list(unique_items.values())
 
 
-if __name__ == "__main__":
+def get_item_details(
+    token: str,
+    item_id: str,
+) -> dict[str, Any]:
+    encoded_item_id = quote(item_id, safe="")
+
+    response = requests.get(
+        f"{ITEM_URL}/{encoded_item_id}",
+        headers=ebay_headers(token),
+        timeout=30,
+    )
+
+    response.raise_for_status()
+
+    return response.json()
+
+
+# ─────────────────────────────────────────────
+# 가격 및 배송비
+# ─────────────────────────────────────────────
+
+def parse_amount(
+    amount_data: Any,
+) -> tuple[float | None, str]:
+    if not isinstance(amount_data, dict):
+        return None, "USD"
+
+    raw_value = amount_data.get("value")
+    currency = amount_data.get("currency", "USD")
+
+    if raw_value is None:
+        return None, currency
+
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        return None, currency
+
+    return value, currency
+
+
+def get_summary_price(
+    item: dict[str, Any],
+) -> tuple[float | None, str, str]:
+    """
+    검색 결과에서 가격을 찾는다.
+
+    반환값:
+    가격, 통화, 표시명
+    """
+
+    current_bid, currency = parse_amount(
+        item.get("currentBidPrice")
+    )
+
+    if current_bid is not None and current_bid > 0:
+        return current_bid, currency, "현재 입찰가"
+
+    regular_price, currency = parse_amount(
+        item.get("price")
+    )
+
+    if regular_price is not None and regular_price > 0:
+        return regular_price, currency, "시작가"
+
+    return None, "USD", "가격"
+
+
+def get_detailed_price(
+    item: dict[str, Any],
+) -> tuple[float | None, str, str]:
+    """
+    상품 상세정보에서 경매 가격을 찾는다.
+
+    우선순위:
+    현재 최고 입찰가 → 다음 최소 입찰가/시작가 → 일반 가격
+    """
+
+    current_bid, currency = parse_amount(
+        item.get("currentBidPrice")
+    )
+
+    if current_bid is not None and current_bid > 0:
+        return current_bid, currency, "현재 입찰가"
+
+    minimum_bid, currency = parse_amount(
+        item.get("minimumPriceToBid")
+    )
+
+    if minimum_bid is not None and minimum_bid > 0:
+        bid_count = int(item.get("bidCount", 0) or 0)
+
+        if bid_count > 0:
+            return minimum_bid, currency, "다음 최소 입찰가"
+
+        return minimum_bid, currency, "시작가"
+
+    regular_price, currency = parse_amount(
+        item.get("price")
+    )
+
+    if regular_price is not None and regular_price > 0:
+        return regular_price, currency, "상품가"
+
+    return None, "USD", "가격 확인 필요"
+
+
+def resolve_item_price(
+    token: str,
+    item: dict[str, Any],
+) -> tuple[float | None, str, str, dict[str, Any]]:
+    """
+    검색 결과에 가격이 있으면 사용하고,
+    없으면 상품 상세 API를 한 번 호출한다.
+    """
+
+    price, currency, label = get_summary_price(item)
+
+    if price is not None:
+        return price, currency, label, item
+
+    item_id = item.get("itemId")
+
+    if not item_id:
+        return None, "USD", "가격 확인 필요", item
+
+    try:
+        detailed_item = get_item_details(
+            token=token,
+            item_id=item_id,
+        )
+    except requests.RequestException as error:
+        print(
+            "상세 가격 조회 실패:",
+            item.get("title", "제목 없음"),
+        )
+        print(error)
+
+        return None, "USD", "가격 확인 필요", item
+
+    price, currency, label = get_detailed_price(
+        detailed_item
+    )
+
+    return price, currency, label, detailed_item
+
+
+def get_shipping_cost(item: dict[str, Any]) -> float:
+    shipping_options = item.get("shippingOptions", [])
+
+    if not isinstance(shipping_options, list):
+        return 0.0
+
+    for option in shipping_options:
+        shipping_cost = option.get("shippingCost", {})
+
+        value, _ = parse_amount(shipping_cost)
+
+        if value is not None:
+            return value
+
+    return 0.0
+
+
+# ─────────────────────────────────────────────
+# 시간, 사이즈, 제외 키워드
+# ─────────────────────────────────────────────
+
+def get_hours_left(
+    end_date: str | None,
+) -> float | None:
+    if not end_date:
+        return None
+
+    try:
+        end_time = datetime.fromisoformat(
+            end_date.replace("Z", "+00:00")
+        )
+    except ValueError:
+        return None
+
+    now = datetime.now(timezone.utc)
+
+    return (end_time - now).total_seconds() / 3600
+
+
+def format_time_left(
+    hours_left: float | None,
+) -> str:
+    if hours_left is None:
+        return "종료시간 정보 없음"
+
+    if hours_left <= 0:
+        return "종료됨"
+
+    total_minutes = int(hours_left * 60)
+    hours, minutes = divmod(total_minutes, 60)
+
+    return f"{hours}시간 {minutes}분"
+
+
+def has_allowed_size(title: str) -> bool:
+    normalized_title = title.upper()
+
+    return any(
+        re.search(pattern, normalized_title)
+        for pattern in SIZE_PATTERNS
+    )
+
+
+def find_excluded_keyword(
+    title: str,
+    exclude_keywords: list[str],
+) -> str | None:
+    lower_title = title.lower()
+
+    for keyword in exclude_keywords:
+        if keyword.lower() in lower_title:
+            return keyword
+
+    return None
+
+
+# ─────────────────────────────────────────────
+# 매물 필터링
+# ─────────────────────────────────────────────
+
+def evaluate_item(
+    token: str,
+    item: dict[str, Any],
+    exclude_keywords: list[str],
+) -> tuple[bool, str, dict[str, Any]]:
+    title = item.get("title", "")
+
+    excluded_keyword = find_excluded_keyword(
+        title=title,
+        exclude_keywords=exclude_keywords,
+    )
+
+    if excluded_keyword:
+        return (
+            False,
+            f"제외 키워드 포함: {excluded_keyword}",
+            item,
+        )
+
+    if not has_allowed_size(title):
+        return False, "L~XXL 사이즈 확인 불가", item
+
+    hours_left = get_hours_left(
+        item.get("itemEndDate")
+    )
+
+    if hours_left is None:
+        return False, "종료시간 정보 없음", item
+
+    if hours_left <= 0:
+        return False, "이미 종료됨", item
+
+    if hours_left > MAX_HOURS_LEFT:
+        return False, "종료까지 24시간 이상", item
+
+    price, currency, price_label, detailed_item = (
+        resolve_item_price(
+            token=token,
+            item=item,
+        )
+    )
+
+    if price is None or price <= 0:
+        return False, "입찰가 또는 시작가 확인 불가", item
+
+    # 검색 결과의 배송비가 더 안정적으로 제공되는 경우가 있어
+    # 우선 검색 결과 배송비를 사용하고, 없으면 상세정보를 사용한다.
+    shipping = get_shipping_cost(item)
+
+    if shipping == 0:
+        shipping = get_shipping_cost(detailed_item)
+
+    total_before_forwarding = price + shipping
+
+    if total_before_forwarding > MAX_TOTAL_USD:
+        return (
+            False,
+            "상품가+미국 배송비 $500 초과",
+            item,
+        )
+
+    enriched_item = dict(item)
+
+    enriched_item["_resolved_price"] = price
+    enriched_item["_resolved_currency"] = currency
+    enriched_item["_price_label"] = price_label
+    enriched_item["_shipping_cost"] = shipping
+    enriched_item["_hours_left"] = hours_left
+    enriched_item["_detailed_item"] = detailed_item
+
+    return True, "통과", enriched_item
+
+
+# ─────────────────────────────────────────────
+# 텔레그램
+# ─────────────────────────────────────────────
+
+def build_telegram_message(
+    item: dict[str, Any],
+    exchange_rate: float,
+) -> str:
+    title = item.get("title", "제목 없음")
+
+    price = float(item["_resolved_price"])
+    shipping = float(item["_shipping_cost"])
+    price_label = item["_price_label"]
+
+    total_usd = (
+        price
+        + shipping
+        + FORWARDING_FEE_USD
+    )
+
+    price_krw = round(price * exchange_rate)
+    shipping_krw = round(shipping * exchange_rate)
+    total_krw = round(total_usd * exchange_rate)
+
+    time_left = format_time_left(
+        item.get("_hours_left")
+    )
+
+    ebay_url = item.get(
+        "itemWebUrl",
+        "링크 없음",
+    )
+
+    return f"""
+🎯 빈티지 레이더
+
+👕 {title}
+
+💰 {price_label}
+${price:.2f} / 약 {price_krw:,}원
+
+🚚 미국 배송비
+${shipping:.2f} / 약 {shipping_krw:,}원
+
+💵 총 예상금액
+${total_usd:.2f} / 약 {total_krw:,}원
+(배대지 $10 포함)
+
+⏰ 남은 시간
+{time_left}
+
+🔗 eBay 바로가기
+{ebay_url}
+""".strip()
+
+
+def send_qualified_items(
+    qualified_items: list[dict[str, Any]],
+) -> None:
+    if not qualified_items:
+        send_telegram_message(
+            "🎯 빈티지 레이더\n\n"
+            "이번 검색에서는 기준을 충족한 상품 없음"
+        )
+        return
+
+    exchange_result = usd_to_krw(1)
+    exchange_rate = float(exchange_result["rate"])
+
+    alert_items = qualified_items[:MAX_ALERTS_PER_RUN]
+
+    for item in alert_items:
+        message = build_telegram_message(
+            item=item,
+            exchange_rate=exchange_rate,
+        )
+
+        send_telegram_message(message)
+
+
+# ─────────────────────────────────────────────
+# 메인 실행
+# ─────────────────────────────────────────────
+
+def main() -> None:
     config = load_search_config()
 
     all_queries = create_all_queries(config)
@@ -332,33 +600,42 @@ if __name__ == "__main__":
 
     print("=" * 70)
 
-    access_token = get_access_token()
+    token = get_access_token()
 
     items = search_multiple_queries(
-        token=access_token,
+        token=token,
         queries=selected_queries,
     )
 
-    qualified_items = []
-    rejected_items = []
+    qualified_items: list[dict[str, Any]] = []
+    rejected_items: list[
+        tuple[dict[str, Any], str]
+    ] = []
 
-    for item in items:
-        passed, reason = is_qualified_item(
+    for index, item in enumerate(items, start=1):
+        print(
+            f"[{index}/{len(items)}] 필터 확인: "
+            f"{item.get('title', '제목 없음')}"
+        )
+
+        passed, reason, processed_item = evaluate_item(
+            token=token,
             item=item,
             exclude_keywords=exclude_keywords,
         )
 
         if passed:
-            qualified_items.append(item)
+            qualified_items.append(processed_item)
         else:
             rejected_items.append((item, reason))
 
+    # 종료가 빠른 매물부터 정렬
     qualified_items.sort(
-        key=lambda item: (
-            get_hours_left(item.get("itemEndDate"))
-            if get_hours_left(item.get("itemEndDate"))
-            is not None
-            else float("inf")
+        key=lambda current_item: float(
+            current_item.get(
+                "_hours_left",
+                float("inf"),
+            )
         )
     )
 
@@ -372,54 +649,26 @@ if __name__ == "__main__":
         qualified_items,
         start=1,
     ):
-        title = item.get("title", "제목 없음")
-        item_id = item.get("itemId", "")
-detailed_item = item
+        price = float(item["_resolved_price"])
+        shipping = float(item["_shipping_cost"])
+        price_label = item["_price_label"]
 
-if item_id:
-    try:
-        detailed_item = get_item_details(
-            access_token,
-            item_id,
-        )
-    except requests.RequestException as error:
-        print(f"상품 상세 가격 조회 실패: {title}")
-        print(error)
-
-price, currency = get_item_price(detailed_item)
-
-if price is None:
-    price_text = "가격 확인 필요"
-    price_krw_text = ""
-    price_for_total = 0.0
-else:
-    price_krw = round(price * exchange_rate)
-    price_text = f"${price:.2f}"
-    price_krw_text = f" / 약 {price_krw:,}원"
-    price_for_total = price
-        shipping = get_shipping_cost(item)
-        total = price + shipping
-
-        hours_left = get_hours_left(
-            item.get("itemEndDate")
-        )
-
-        print(f"[통과 {index}] {title}")
-        print(f"현재가: {price:.2f} {currency}")
         print(
-            f"미국 배송비: "
-            f"{shipping:.2f} {currency}"
+            f"[통과 {index}] "
+            f"{item.get('title', '제목 없음')}"
+        )
+        print(f"{price_label}: ${price:.2f}")
+        print(f"미국 배송비: ${shipping:.2f}")
+        print(
+            "상품가+미국 배송비: "
+            f"${price + shipping:.2f}"
         )
         print(
-            f"현재 총비용: "
-            f"{total:.2f} {currency}"
+            "남은 시간: "
+            f"{format_time_left(item['_hours_left'])}"
         )
         print(
-            f"남은 시간: "
-            f"{format_time_left(hours_left)}"
-        )
-        print(
-            f"링크: "
+            "링크: "
             f"{item.get('itemWebUrl', '링크 없음')}"
         )
         print("-" * 70)
@@ -427,74 +676,17 @@ else:
     if not qualified_items:
         print("이번 검색에서는 기준을 충족한 상품 없음")
 
-        print("\n아깝게 탈락한 후보:")
+        if rejected_items:
+            print("\n아깝게 탈락한 후보:")
 
-        for item, reason in rejected_items[:3]:
-            print(
-                f"- {item.get('title', '제목 없음')}"
-            )
-            print(f"  탈락 사유: {reason}")
+            for item, reason in rejected_items[:3]:
+                print(
+                    f"- {item.get('title', '제목 없음')}"
+                )
+                print(f"  탈락 사유: {reason}")
 
-    # 조건 통과 매물을 텔레그램으로 전송
-    MAX_ALERTS_PER_RUN = 5
-    FORWARDING_FEE_USD = 10.0
+    send_qualified_items(qualified_items)
 
-    if qualified_items:
-        alert_items = qualified_items[:MAX_ALERTS_PER_RUN]
 
-        # 환율 API는 실행당 한 번만 호출
-        exchange_rate = usd_to_krw(1)["rate"]
-
-        for item in alert_items:
-            title = item.get("title", "제목 없음")
-
-            price, currency = get_item_price(item)
-            shipping = get_shipping_cost(item)
-
-            total_usd = price + shipping + FORWARDING_FEE_USD
-
-            price_krw = round(price * exchange_rate)
-            shipping_krw = round(shipping * exchange_rate)
-            total_krw = round(total_usd * exchange_rate)
-
-            hours_left = get_hours_left(
-                item.get("itemEndDate")
-            )
-            time_left = format_time_left(hours_left)
-
-            ebay_url = item.get(
-                "itemWebUrl",
-                "링크 없음",
-            )
-
-            message = f"""
-🎯 빈티지 레이더
-
-👕 {title}
-
-💰 현재 입찰가
-${price:.2f} / 약 {price_krw:,}원
-
-🚚 미국 배송비
-${shipping:.2f} / 약 {shipping_krw:,}원
-
-💵 총 예상금액
-${total_usd:.2f} / 약 {total_krw:,}원
-(배대지 $10 포함)
-
-⏰ 남은 시간
-{time_left}
-
-🔗 eBay 바로가기
-{ebay_url}
-""".strip()
-
-            send_telegram_message(message)
-
-    else:
-        message = (
-            "🎯 빈티지 레이더\n\n"
-            "이번 검색에서는 기준을 충족한 상품 없음"
-        )
-
-        send_telegram_message(message)
+if __name__ == "__main__":
+    main()
