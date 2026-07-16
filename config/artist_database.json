@@ -1,99 +1,985 @@
 {
-  "tier_1": [
-    "Nirvana",
-    "Metallica",
-    "Marilyn Manson",
-    "Nine Inch Nails",
-    "Tool",
-    "Alice in Chains",
-    "Soundgarden",
-    "Pearl Jam",
-    "Smashing Pumpkins",
-    "Rage Against the Machine",
-    "Red Hot Chili Peppers",
-    "Pantera",
-    "Slayer",
-    "Megadeth",
-    "Iron Maiden",
-    "Black Sabbath",
-    "Ozzy Osbourne",
-    "White Zombie",
-    "Type O Negative",
-    "Misfits",
-    "Pink Floyd",
-    "Led Zeppelin",
-    "Grateful Dead",
-    "Rush",
-    "The Cure",
-    "The Smiths",
-    "Sonic Youth",
-    "Depeche Mode",
-    "Joy Division",
-    "Wu-Tang Clan",
-    "Tupac",
-    "Notorious BIG",
-    "Korn",
-    "The Rolling Stones",
-    "Guns N Roses",
-    "Aerosmith",
-    "Mötley Crüe",
-    "Def Leppard",
-    "Michael Jackson"
-  ],
-
-  "tier_2": [
-    "Radiohead",
-    "Hole",
-    "Deftones",
-    "Korn",
-    "Slipknot",
-    "System of a Down",
-    "Sepultura",
-    "Motorhead",
-    "Death",
-    "Cannibal Corpse",
-    "David Bowie",
-    "Queen",
-    "KISS",
-    "ACDC",
-    "Van Halen",
-    "Scorpions",
-    "Sade",
-    "Bjork",
-    "Beastie Boys",
-    "Public Enemy"
-  ],
-
-  "tier_3": [
-    "Sex Pistols",
-    "The Clash",
-    "Black Flag",
-    "Dead Kennedys",
-    "Bad Brains",
-    "Bad Religion",
-    "NOFX",
-    "Social Distortion",
-    "Green Day",
-    "The Offspring",
-    "Foo Fighters",
-    "Blink-182",
-    "Weezer",
-    "Oasis",
-    "Blur",
-    "Pixies",
-    "Dinosaur Jr",
-    "My Bloody Valentine",
-    "Slowdive",
-    "The Cramps",
-    "Rob Zombie",
-    "Alice Cooper",
-    "The Who",
-    "Journey",
-    "Nas",
-    "Outkast",
-    "Run DMC",
-    "Madonna",
-    "Janet Jackson",
-    "Aaliyah"
-  ]
+  "version": 2,
+  "tiers": {
+    "tier_1": [
+      {
+        "name": "Nirvana",
+        "keywords": [
+          "Nirvana",
+          "Nevermind",
+          "In Utero",
+          "Bleach",
+          "Incesticide",
+          "Heart Shaped Box",
+          "Sliver",
+          "Kurt Cobain",
+          "Sub Pop"
+        ]
+      },
+      {
+        "name": "Metallica",
+        "keywords": [
+          "Metallica",
+          "Master of Puppets",
+          "Ride the Lightning",
+          "And Justice for All",
+          "Kill Em All",
+          "Black Album",
+          "Pushead",
+          "Cliff Burton",
+          "James Hetfield"
+        ]
+      },
+      {
+        "name": "Marilyn Manson",
+        "keywords": [
+          "Marilyn Manson",
+          "Antichrist Superstar",
+          "Mechanical Animals",
+          "Portrait of an American Family",
+          "Smells Like Children",
+          "Holy Wood"
+        ]
+      },
+      {
+        "name": "Nine Inch Nails",
+        "keywords": [
+          "Nine Inch Nails",
+          "The Downward Spiral",
+          "Pretty Hate Machine",
+          "Broken",
+          "Further Down the Spiral",
+          "NIN",
+          "Trent Reznor"
+        ]
+      },
+      {
+        "name": "Tool",
+        "keywords": [
+          "Tool",
+          "Aenima",
+          "Undertow",
+          "Lateralus",
+          "Salival",
+          "Opiate",
+          "Maynard James Keenan"
+        ]
+      },
+      {
+        "name": "Alice in Chains",
+        "keywords": [
+          "Alice in Chains",
+          "Dirt",
+          "Facelift",
+          "Jar of Flies",
+          "Tripod",
+          "Layne Staley",
+          "AIC"
+        ]
+      },
+      {
+        "name": "Soundgarden",
+        "keywords": [
+          "Soundgarden",
+          "Badmotorfinger",
+          "Superunknown",
+          "Louder Than Love",
+          "Down on the Upside",
+          "Chris Cornell"
+        ]
+      },
+      {
+        "name": "Pearl Jam",
+        "keywords": [
+          "Pearl Jam",
+          "Ten",
+          "Vs",
+          "Vitalogy",
+          "Yield",
+          "Eddie Vedder",
+          "Stickman"
+        ]
+      },
+      {
+        "name": "Smashing Pumpkins",
+        "keywords": [
+          "Smashing Pumpkins",
+          "Siamese Dream",
+          "Mellon Collie",
+          "Gish",
+          "Zero",
+          "Billy Corgan"
+        ]
+      },
+      {
+        "name": "Rage Against the Machine",
+        "keywords": [
+          "Rage Against the Machine",
+          "RATM",
+          "Evil Empire",
+          "Battle of Los Angeles",
+          "Bombtrack",
+          "Zack de la Rocha"
+        ]
+      },
+      {
+        "name": "Red Hot Chili Peppers",
+        "keywords": [
+          "Red Hot Chili Peppers",
+          "RHCP",
+          "Blood Sugar Sex Magik",
+          "Californication",
+          "Mothers Milk",
+          "One Hot Minute"
+        ]
+      },
+      {
+        "name": "Pantera",
+        "keywords": [
+          "Pantera",
+          "Cowboys from Hell",
+          "Vulgar Display of Power",
+          "Far Beyond Driven",
+          "Dimebag Darrell",
+          "Phil Anselmo"
+        ]
+      },
+      {
+        "name": "Slayer",
+        "keywords": [
+          "Slayer",
+          "Reign in Blood",
+          "South of Heaven",
+          "Seasons in the Abyss",
+          "Divine Intervention",
+          "Tom Araya"
+        ]
+      },
+      {
+        "name": "Megadeth",
+        "keywords": [
+          "Megadeth",
+          "Rust in Peace",
+          "Peace Sells",
+          "Countdown to Extinction",
+          "Youthanasia",
+          "Dave Mustaine"
+        ]
+      },
+      {
+        "name": "Iron Maiden",
+        "keywords": [
+          "Iron Maiden",
+          "Eddie",
+          "Powerslave",
+          "Somewhere in Time",
+          "Seventh Son",
+          "Number of the Beast",
+          "Fear of the Dark"
+        ]
+      },
+      {
+        "name": "Black Sabbath",
+        "keywords": [
+          "Black Sabbath",
+          "Paranoid",
+          "Master of Reality",
+          "Vol 4",
+          "Sabbath Bloody Sabbath",
+          "Heaven and Hell",
+          "Tony Iommi"
+        ]
+      },
+      {
+        "name": "Ozzy Osbourne",
+        "keywords": [
+          "Ozzy Osbourne",
+          "Blizzard of Ozz",
+          "Diary of a Madman",
+          "No More Tears",
+          "Randy Rhoads",
+          "Ozzfest",
+          "Speak of the Devil"
+        ]
+      },
+      {
+        "name": "White Zombie",
+        "keywords": [
+          "White Zombie",
+          "Astro Creep",
+          "La Sexorcisto",
+          "Thunder Kiss 65",
+          "Rob Zombie",
+          "Freakazoid"
+        ]
+      },
+      {
+        "name": "Type O Negative",
+        "keywords": [
+          "Type O Negative",
+          "Bloody Kisses",
+          "October Rust",
+          "World Coming Down",
+          "Peter Steele",
+          "Life Is Killing Me"
+        ]
+      },
+      {
+        "name": "Misfits",
+        "keywords": [
+          "Misfits",
+          "Crimson Ghost",
+          "Walk Among Us",
+          "Earth AD",
+          "Legacy of Brutality",
+          "Glenn Danzig",
+          "Fiend Skull"
+        ]
+      },
+      {
+        "name": "Pink Floyd",
+        "keywords": [
+          "Pink Floyd",
+          "Dark Side of the Moon",
+          "The Wall",
+          "Wish You Were Here",
+          "Animals",
+          "Division Bell",
+          "Pulse"
+        ]
+      },
+      {
+        "name": "Led Zeppelin",
+        "keywords": [
+          "Led Zeppelin",
+          "Swan Song",
+          "Physical Graffiti",
+          "Houses of the Holy",
+          "Led Zeppelin IV",
+          "Jimmy Page",
+          "Robert Plant"
+        ]
+      },
+      {
+        "name": "Grateful Dead",
+        "keywords": [
+          "Grateful Dead",
+          "Dancing Bears",
+          "Steal Your Face",
+          "Bertha",
+          "Liquid Blue",
+          "Jerry Garcia"
+        ]
+      },
+      {
+        "name": "Rush",
+        "keywords": [
+          "Rush",
+          "2112",
+          "Moving Pictures",
+          "Roll the Bones",
+          "Counterparts",
+          "Presto",
+          "Grace Under Pressure"
+        ]
+      },
+      {
+        "name": "The Cure",
+        "keywords": [
+          "The Cure",
+          "Disintegration",
+          "Wish",
+          "Pornography",
+          "Kiss Me",
+          "Robert Smith",
+          "Boys Dont Cry"
+        ]
+      },
+      {
+        "name": "The Smiths",
+        "keywords": [
+          "The Smiths",
+          "Meat Is Murder",
+          "The Queen Is Dead",
+          "Strangeways",
+          "Morrissey",
+          "Johnny Marr"
+        ]
+      },
+      {
+        "name": "Sonic Youth",
+        "keywords": [
+          "Sonic Youth",
+          "Goo",
+          "Dirty",
+          "Daydream Nation",
+          "Washing Machine",
+          "Kim Gordon"
+        ]
+      },
+      {
+        "name": "Depeche Mode",
+        "keywords": [
+          "Depeche Mode",
+          "Violator",
+          "Music for the Masses",
+          "Black Celebration",
+          "Songs of Faith and Devotion",
+          "Dave Gahan"
+        ]
+      },
+      {
+        "name": "Joy Division",
+        "keywords": [
+          "Joy Division",
+          "Unknown Pleasures",
+          "Closer",
+          "Love Will Tear Us Apart",
+          "Ian Curtis"
+        ]
+      },
+      {
+        "name": "Wu-Tang Clan",
+        "keywords": [
+          "Wu-Tang Clan",
+          "Wu Tang",
+          "Enter the Wu Tang",
+          "36 Chambers",
+          "Protect Ya Neck",
+          "ODB",
+          "Method Man"
+        ]
+      },
+      {
+        "name": "Tupac",
+        "keywords": [
+          "Tupac",
+          "2Pac",
+          "Makaveli",
+          "All Eyez on Me",
+          "Thug Life",
+          "Me Against the World"
+        ]
+      },
+      {
+        "name": "Notorious BIG",
+        "keywords": [
+          "Notorious BIG",
+          "Biggie",
+          "Biggie Smalls",
+          "Ready to Die",
+          "Life After Death",
+          "Bad Boy"
+        ]
+      },
+      {
+        "name": "Korn",
+        "keywords": [
+          "Korn",
+          "Follow the Leader",
+          "Issues",
+          "Life Is Peachy",
+          "Jonathan Davis",
+          "Freak on a Leash"
+        ]
+      },
+      {
+        "name": "The Rolling Stones",
+        "keywords": [
+          "The Rolling Stones",
+          "Tongue Logo",
+          "Steel Wheels",
+          "Voodoo Lounge",
+          "Tattoo You",
+          "Mick Jagger",
+          "Keith Richards"
+        ]
+      },
+      {
+        "name": "Guns N Roses",
+        "keywords": [
+          "Guns N Roses",
+          "GNR",
+          "Appetite for Destruction",
+          "Use Your Illusion",
+          "Axl Rose",
+          "Slash"
+        ]
+      },
+      {
+        "name": "Aerosmith",
+        "keywords": [
+          "Aerosmith",
+          "Get a Grip",
+          "Pump",
+          "Permanent Vacation",
+          "Toys in the Attic",
+          "Steven Tyler"
+        ]
+      },
+      {
+        "name": "Mötley Crüe",
+        "keywords": [
+          "Mötley Crüe",
+          "Motley Crue",
+          "Dr Feelgood",
+          "Shout at the Devil",
+          "Girls Girls Girls",
+          "Nikki Sixx",
+          "Vince Neil"
+        ]
+      },
+      {
+        "name": "Def Leppard",
+        "keywords": [
+          "Def Leppard",
+          "Hysteria",
+          "Pyromania",
+          "Adrenalize",
+          "Joe Elliott"
+        ]
+      },
+      {
+        "name": "Michael Jackson",
+        "keywords": [
+          "Michael Jackson",
+          "Thriller",
+          "Bad Tour",
+          "Dangerous Tour",
+          "HIStory",
+          "Beat It",
+          "Smooth Criminal"
+        ]
+      }
+    ],
+    "tier_2": [
+      {
+        "name": "Radiohead",
+        "keywords": [
+          "Radiohead",
+          "OK Computer",
+          "The Bends",
+          "Kid A",
+          "Pablo Honey",
+          "Thom Yorke"
+        ]
+      },
+      {
+        "name": "Hole",
+        "keywords": [
+          "Hole",
+          "Live Through This",
+          "Celebrity Skin",
+          "Pretty on the Inside",
+          "Courtney Love"
+        ]
+      },
+      {
+        "name": "Deftones",
+        "keywords": [
+          "Deftones",
+          "Around the Fur",
+          "White Pony",
+          "Adrenaline",
+          "Saturday Night Wrist",
+          "Chino Moreno"
+        ]
+      },
+      {
+        "name": "Korn",
+        "keywords": [
+          "Korn",
+          "Follow the Leader",
+          "Issues",
+          "Life Is Peachy",
+          "Jonathan Davis",
+          "Freak on a Leash"
+        ]
+      },
+      {
+        "name": "Slipknot",
+        "keywords": [
+          "Slipknot",
+          "Iowa",
+          "Self Titled",
+          "Subliminal Verses",
+          "Corey Taylor",
+          "Maggot"
+        ]
+      },
+      {
+        "name": "System of a Down",
+        "keywords": [
+          "System of a Down",
+          "Toxicity",
+          "Mezmerize",
+          "Hypnotize",
+          "Serj Tankian",
+          "SOAD"
+        ]
+      },
+      {
+        "name": "Sepultura",
+        "keywords": [
+          "Sepultura",
+          "Roots",
+          "Chaos AD",
+          "Arise",
+          "Beneath the Remains",
+          "Max Cavalera"
+        ]
+      },
+      {
+        "name": "Motorhead",
+        "keywords": [
+          "Motorhead",
+          "Motörhead",
+          "Ace of Spades",
+          "Overkill",
+          "Bomber",
+          "Lemmy"
+        ]
+      },
+      {
+        "name": "Death",
+        "keywords": [
+          "Death",
+          "Scream Bloody Gore",
+          "Leprosy",
+          "Human",
+          "Symbolic",
+          "Chuck Schuldiner"
+        ]
+      },
+      {
+        "name": "Cannibal Corpse",
+        "keywords": [
+          "Cannibal Corpse",
+          "Tomb of the Mutilated",
+          "Butchered at Birth",
+          "The Bleeding",
+          "Corpsegrinder"
+        ]
+      },
+      {
+        "name": "David Bowie",
+        "keywords": [
+          "David Bowie",
+          "Ziggy Stardust",
+          "Aladdin Sane",
+          "Serious Moonlight",
+          "Glass Spider",
+          "Thin White Duke"
+        ]
+      },
+      {
+        "name": "Queen",
+        "keywords": [
+          "Queen",
+          "Bohemian Rhapsody",
+          "News of the World",
+          "A Night at the Opera",
+          "Freddie Mercury",
+          "Magic Tour"
+        ]
+      },
+      {
+        "name": "KISS",
+        "keywords": [
+          "KISS",
+          "Destroyer",
+          "Love Gun",
+          "Alive",
+          "Gene Simmons",
+          "Paul Stanley",
+          "Psycho Circus"
+        ]
+      },
+      {
+        "name": "ACDC",
+        "keywords": [
+          "ACDC",
+          "AC/DC",
+          "Back in Black",
+          "Highway to Hell",
+          "For Those About to Rock",
+          "Angus Young",
+          "Ballbreaker"
+        ]
+      },
+      {
+        "name": "Van Halen",
+        "keywords": [
+          "Van Halen",
+          "5150",
+          "OU812",
+          "Balance Tour",
+          "Diver Down",
+          "Eddie Van Halen",
+          "David Lee Roth"
+        ]
+      },
+      {
+        "name": "Scorpions",
+        "keywords": [
+          "Scorpions",
+          "Blackout",
+          "Love at First Sting",
+          "Crazy World",
+          "Savage Amusement",
+          "Rock You Like a Hurricane"
+        ]
+      },
+      {
+        "name": "Sade",
+        "keywords": [
+          "Sade",
+          "Love Deluxe",
+          "Diamond Life",
+          "Promise",
+          "Stronger Than Pride"
+        ]
+      },
+      {
+        "name": "Bjork",
+        "keywords": [
+          "Bjork",
+          "Debut",
+          "Post",
+          "Homogenic",
+          "Vespertine",
+          "Björk"
+        ]
+      },
+      {
+        "name": "Beastie Boys",
+        "keywords": [
+          "Beastie Boys",
+          "Check Your Head",
+          "Ill Communication",
+          "Licensed to Ill",
+          "Pauls Boutique",
+          "Intergalactic"
+        ]
+      },
+      {
+        "name": "Public Enemy",
+        "keywords": [
+          "Public Enemy",
+          "It Takes a Nation",
+          "Fear of a Black Planet",
+          "Fight the Power",
+          "Chuck D",
+          "Flavor Flav"
+        ]
+      }
+    ],
+    "tier_3": [
+      {
+        "name": "Sex Pistols",
+        "keywords": [
+          "Sex Pistols",
+          "Never Mind the Bollocks",
+          "God Save the Queen",
+          "Sid Vicious",
+          "Johnny Rotten"
+        ]
+      },
+      {
+        "name": "The Clash",
+        "keywords": [
+          "The Clash",
+          "London Calling",
+          "Combat Rock",
+          "Sandinista",
+          "Joe Strummer"
+        ]
+      },
+      {
+        "name": "Black Flag",
+        "keywords": [
+          "Black Flag",
+          "Damaged",
+          "My War",
+          "Bars Logo",
+          "Henry Rollins",
+          "Raymond Pettibon"
+        ]
+      },
+      {
+        "name": "Dead Kennedys",
+        "keywords": [
+          "Dead Kennedys",
+          "Fresh Fruit",
+          "Plastic Surgery Disasters",
+          "Jello Biafra",
+          "DK Logo"
+        ]
+      },
+      {
+        "name": "Bad Brains",
+        "keywords": [
+          "Bad Brains",
+          "Quickness",
+          "Rock for Light",
+          "I Against I",
+          "HR"
+        ]
+      },
+      {
+        "name": "Bad Religion",
+        "keywords": [
+          "Bad Religion",
+          "Suffer",
+          "No Control",
+          "Against the Grain",
+          "Crossbuster"
+        ]
+      },
+      {
+        "name": "NOFX",
+        "keywords": [
+          "NOFX",
+          "Punk in Drublic",
+          "White Trash Two Heebs",
+          "Fat Mike",
+          "Fat Wreck"
+        ]
+      },
+      {
+        "name": "Social Distortion",
+        "keywords": [
+          "Social Distortion",
+          "Mommys Little Monster",
+          "Skelly Logo",
+          "Mike Ness"
+        ]
+      },
+      {
+        "name": "Green Day",
+        "keywords": [
+          "Green Day",
+          "Dookie",
+          "Insomniac",
+          "Nimrod",
+          "Kerplunk",
+          "Billie Joe"
+        ]
+      },
+      {
+        "name": "The Offspring",
+        "keywords": [
+          "The Offspring",
+          "Smash",
+          "Ixnay on the Hombre",
+          "Americana",
+          "Dexter Holland"
+        ]
+      },
+      {
+        "name": "Foo Fighters",
+        "keywords": [
+          "Foo Fighters",
+          "The Colour and the Shape",
+          "There Is Nothing Left to Lose",
+          "Dave Grohl"
+        ]
+      },
+      {
+        "name": "Blink-182",
+        "keywords": [
+          "Blink-182",
+          "Enema of the State",
+          "Dude Ranch",
+          "Take Off Your Pants",
+          "Mark Tom Travis"
+        ]
+      },
+      {
+        "name": "Weezer",
+        "keywords": [
+          "Weezer",
+          "Blue Album",
+          "Pinkerton",
+          "Green Album",
+          "Rivers Cuomo"
+        ]
+      },
+      {
+        "name": "Oasis",
+        "keywords": [
+          "Oasis",
+          "Definitely Maybe",
+          "Morning Glory",
+          "Be Here Now",
+          "Noel Gallagher",
+          "Liam Gallagher"
+        ]
+      },
+      {
+        "name": "Blur",
+        "keywords": [
+          "Blur",
+          "Parklife",
+          "Modern Life Is Rubbish",
+          "The Great Escape",
+          "Damon Albarn"
+        ]
+      },
+      {
+        "name": "Pixies",
+        "keywords": [
+          "Pixies",
+          "Doolittle",
+          "Surfer Rosa",
+          "Bossanova",
+          "Black Francis"
+        ]
+      },
+      {
+        "name": "Dinosaur Jr",
+        "keywords": [
+          "Dinosaur Jr",
+          "Green Mind",
+          "Where You Been",
+          "Youre Living All Over Me",
+          "J Mascis"
+        ]
+      },
+      {
+        "name": "My Bloody Valentine",
+        "keywords": [
+          "My Bloody Valentine",
+          "Loveless",
+          "Isnt Anything",
+          "Glider",
+          "Kevin Shields"
+        ]
+      },
+      {
+        "name": "Slowdive",
+        "keywords": [
+          "Slowdive",
+          "Souvlaki",
+          "Just for a Day",
+          "Pygmalion",
+          "Rachel Goswell"
+        ]
+      },
+      {
+        "name": "The Cramps",
+        "keywords": [
+          "The Cramps",
+          "Bad Music for Bad People",
+          "Stay Sick",
+          "Smell of Female",
+          "Poison Ivy",
+          "Lux Interior"
+        ]
+      },
+      {
+        "name": "Rob Zombie",
+        "keywords": [
+          "Rob Zombie",
+          "Hellbilly Deluxe",
+          "The Sinister Urge",
+          "Dragula",
+          "Superbeast"
+        ]
+      },
+      {
+        "name": "Alice Cooper",
+        "keywords": [
+          "Alice Cooper",
+          "Welcome to My Nightmare",
+          "Trash",
+          "Billion Dollar Babies",
+          "Poison"
+        ]
+      },
+      {
+        "name": "The Who",
+        "keywords": [
+          "The Who",
+          "Tommy",
+          "Quadrophenia",
+          "Who Are You",
+          "Keith Moon",
+          "Pete Townshend"
+        ]
+      },
+      {
+        "name": "Journey",
+        "keywords": [
+          "Journey",
+          "Escape",
+          "Frontiers",
+          "Raised on Radio",
+          "Steve Perry"
+        ]
+      },
+      {
+        "name": "Nas",
+        "keywords": [
+          "Nas",
+          "Illmatic",
+          "It Was Written",
+          "Nasty Nas",
+          "Queensbridge"
+        ]
+      },
+      {
+        "name": "Outkast",
+        "keywords": [
+          "Outkast",
+          "Aquemini",
+          "ATLiens",
+          "Stankonia",
+          "Andre 3000",
+          "Big Boi"
+        ]
+      },
+      {
+        "name": "Run DMC",
+        "keywords": [
+          "Run DMC",
+          "Run-D.M.C.",
+          "Raising Hell",
+          "King of Rock",
+          "Jam Master Jay"
+        ]
+      },
+      {
+        "name": "Madonna",
+        "keywords": [
+          "Madonna",
+          "Blond Ambition",
+          "Like a Prayer",
+          "Erotica",
+          "The Girlie Show",
+          "Whos That Girl"
+        ]
+      },
+      {
+        "name": "Janet Jackson",
+        "keywords": [
+          "Janet Jackson",
+          "Rhythm Nation",
+          "Janet Tour",
+          "Velvet Rope",
+          "Control"
+        ]
+      },
+      {
+        "name": "Aaliyah",
+        "keywords": [
+          "Aaliyah",
+          "One in a Million",
+          "Age Aint Nothing but a Number",
+          "Try Again",
+          "Rock the Boat"
+        ]
+      }
+    ]
+  }
 }
