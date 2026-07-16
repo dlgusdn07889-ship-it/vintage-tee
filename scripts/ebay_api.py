@@ -175,112 +175,161 @@ def save_seen_item_ids(item_ids: set[str]) -> None:
 # =========================================================
 
 def pick_rotating_items(
-    items: list[str],
+    items: list[dict[str, Any]],
     count: int,
     slot_number: int,
     offset_multiplier: int,
-) -> list[str]:
+) -> list[dict[str, Any]]:
     if not items or count <= 0:
         return []
 
     count = min(count, len(items))
-
     start_index = (
         slot_number * count * offset_multiplier
     ) % len(items)
 
-    selected: list[str] = []
+    return [
+        items[(start_index + offset) % len(items)]
+        for offset in range(count)
+    ]
 
-    for offset in range(count):
-        index = (start_index + offset) % len(items)
-        selected.append(items[index])
 
-    return selected
+def normalize_artist_database(
+    artist_database: dict[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
+    if "tiers" in artist_database:
+        raw_tiers = artist_database.get("tiers", {})
+    else:
+        raw_tiers = artist_database
+
+    normalized = {
+        "tier_1": [],
+        "tier_2": [],
+        "tier_3": [],
+    }
+
+    for tier_name in normalized:
+        for entry in raw_tiers.get(tier_name, []):
+            if isinstance(entry, str):
+                normalized[tier_name].append({
+                    "name": entry,
+                    "keywords": [entry],
+                })
+                continue
+
+            if not isinstance(entry, dict):
+                continue
+
+            name = str(entry.get("name", "")).strip()
+            keywords = [
+                str(value).strip()
+                for value in entry.get("keywords", [])
+                if str(value).strip()
+            ]
+
+            if not name:
+                continue
+
+            if name not in keywords:
+                keywords.insert(0, name)
+
+            normalized[tier_name].append({
+                "name": name,
+                "keywords": list(dict.fromkeys(keywords)),
+            })
+
+    return normalized
 
 
 def select_artists(
     artist_database: dict[str, Any],
-) -> list[tuple[str, str]]:
-    # 10분마다 다음 검색 조합으로 이동
+) -> list[tuple[dict[str, Any], str]]:
     slot_number = int(
         datetime.now(timezone.utc).timestamp() // 600
     )
 
-    tier_1 = artist_database.get("tier_1", [])
-    tier_2 = artist_database.get("tier_2", [])
-    tier_3 = artist_database.get("tier_3", [])
+    database = normalize_artist_database(
+        artist_database
+    )
 
-    selected: list[tuple[str, str]] = []
+    selected = []
 
-    for artist in pick_rotating_items(
-        tier_1,
+    for artist_entry in pick_rotating_items(
+        database["tier_1"],
         TIER_1_ARTISTS_PER_RUN,
         slot_number,
         1,
     ):
-        selected.append((artist, "tier_1"))
+        selected.append((artist_entry, "tier_1"))
 
-    for artist in pick_rotating_items(
-        tier_2,
+    for artist_entry in pick_rotating_items(
+        database["tier_2"],
         TIER_2_ARTISTS_PER_RUN,
         slot_number,
         3,
     ):
-        selected.append((artist, "tier_2"))
+        selected.append((artist_entry, "tier_2"))
 
-    for artist in pick_rotating_items(
-        tier_3,
+    for artist_entry in pick_rotating_items(
+        database["tier_3"],
         TIER_3_ARTISTS_PER_RUN,
         slot_number,
         7,
     ):
-        selected.append((artist, "tier_3"))
+        selected.append((artist_entry, "tier_3"))
 
-    random_generator = random.Random(slot_number)
-    random_generator.shuffle(selected)
-
+    random.Random(slot_number).shuffle(selected)
     return selected
 
 
 def build_queries(
-    selected_artists: list[tuple[str, str]],
+    selected_artists: list[tuple[dict[str, Any], str]],
     search_patterns: dict[str, Any],
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     top_patterns = search_patterns.get(
         "top_priority_patterns",
-        ["{subject} shirt"],
+        ["{subject} shirt", "{subject} tee"],
     )
-
     normal_patterns = search_patterns.get(
         "normal_patterns",
-        ["{subject} shirt"],
+        ["{subject} shirt", "{subject} tee"],
     )
 
     slot_number = int(
         datetime.now(timezone.utc).timestamp() // 600
     )
 
-    queries: list[dict[str, str]] = []
+    queries = []
 
-    for index, (artist, tier) in enumerate(selected_artists):
+    for index, (artist_entry, tier) in enumerate(
+        selected_artists
+    ):
+        artist = artist_entry["name"]
+        keywords = artist_entry.get("keywords", [artist])
         patterns = (
             top_patterns
             if tier == "tier_1"
             else normal_patterns
         )
 
+        keyword_index = (
+            slot_number + index * 3
+        ) % len(keywords)
         pattern_index = (
             slot_number + index
         ) % len(patterns)
 
+        subject = keywords[keyword_index]
         query = patterns[pattern_index].format(
-            subject=artist
+            subject=subject
         )
 
         queries.append({
             "artist": artist,
             "tier": tier,
             "query": query,
+            "subject": subject,
+            "match_terms": keywords,
         })
 
     return queries
@@ -720,13 +769,29 @@ def normalize_search_text(value: str) -> str:
     return " ".join(normalized.split())
 
 
-def title_matches_artist(title: str, artist: str) -> bool:
+def title_matches_artist(
+    title: str,
+    artist: str,
+    match_terms: list[str] | None = None,
+) -> bool:
     normalized_title = normalize_search_text(title)
-    aliases = ARTIST_ALIASES.get(artist, [artist])
 
-    for alias in aliases:
-        normalized_alias = normalize_search_text(alias)
-        if normalized_alias and normalized_alias in normalized_title:
+    candidates = list(
+        ARTIST_ALIASES.get(artist, [artist])
+    )
+
+    if match_terms:
+        candidates.extend(match_terms)
+
+    for candidate in dict.fromkeys(candidates):
+        normalized_candidate = normalize_search_text(
+            candidate
+        )
+
+        if (
+            normalized_candidate
+            and normalized_candidate in normalized_title
+        ):
             return True
 
     return False
@@ -801,10 +866,15 @@ def evaluate_auction(
     hard_excludes: list[str],
     warning_keywords: list[str],
     tag_config: dict[str, Any],
+    match_terms: list[str] | None = None,
 ) -> tuple[bool, str, dict[str, Any]]:
     title = item.get("title", "")
 
-    if not title_matches_artist(title, artist):
+    if not title_matches_artist(
+        title,
+        artist,
+        match_terms,
+    ):
         return False, "검색 아티스트와 제목 불일치", item
 
     excluded = find_matching_keyword(
@@ -890,10 +960,15 @@ def evaluate_fixed_price(
     hard_excludes: list[str],
     warning_keywords: list[str],
     tag_config: dict[str, Any],
+    match_terms: list[str] | None = None,
 ) -> tuple[bool, str, dict[str, Any]]:
     title = item.get("title", "")
 
-    if not title_matches_artist(title, artist):
+    if not title_matches_artist(
+        title,
+        artist,
+        match_terms,
+    ):
         return False, "검색 아티스트와 제목 불일치", item
 
     excluded = find_matching_keyword(
@@ -965,7 +1040,7 @@ def evaluate_fixed_price(
 
 def search_all(
     token: str,
-    query_entries: list[dict[str, str]],
+    query_entries: list[dict[str, Any]],
 ) -> tuple[
     list[dict[str, Any]],
     list[dict[str, Any]],
@@ -1000,6 +1075,10 @@ def search_all(
                     if item_id:
                         item["_search_artist"] = artist
                         item["_search_tier"] = tier
+                        item["_search_match_terms"] = entry.get(
+                            "match_terms",
+                            [artist],
+                        )
                         auction_items[item_id] = item
 
             except requests.RequestException as error:
@@ -1020,6 +1099,10 @@ def search_all(
                     if item_id:
                         item["_search_artist"] = artist
                         item["_search_tier"] = tier
+                        item["_search_match_terms"] = entry.get(
+                            "match_terms",
+                            [artist],
+                        )
                         fixed_items[item_id] = item
 
             except requests.RequestException as error:
@@ -1364,6 +1447,7 @@ def send_alerts(
     ]
 
     if not new_items:
+        print("새로운 조건 충족 상품 없음 — 텔레그램 전송 생략")
         return seen_item_ids
 
     exchange_result = usd_to_krw(1)
@@ -1460,6 +1544,7 @@ def main() -> None:
             hard_excludes,
             warning_keywords,
             tag_config,
+            item.get("_search_match_terms"),
         )
 
         if passed:
@@ -1490,6 +1575,7 @@ def main() -> None:
             hard_excludes,
             warning_keywords,
             tag_config,
+            item.get("_search_match_terms"),
         )
 
         if passed:
