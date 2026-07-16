@@ -1364,10 +1364,6 @@ def send_alerts(
     ]
 
     if not new_items:
-        send_telegram_message(
-            "🎯 빈티지 레이더\n\n"
-            "이번 검색에서는 새로운 조건 충족 상품 없음"
-        )
         return seen_item_ids
 
     exchange_result = usd_to_krw(1)
