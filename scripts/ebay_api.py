@@ -74,6 +74,81 @@ MIN_ASKING_DISCOUNT_PERCENT = 30.0
 
 
 # =========================================================
+# Anti-Reprint / Vintage Authenticity Gate
+# =========================================================
+
+REPRINT_HARD_KEYWORDS = [
+    "reprint",
+    "re-print",
+    "reproduction",
+    "replica",
+    "vintage style",
+    "vintage-style",
+    "retro style",
+    "retro-style",
+    "vintage inspired",
+    "print on demand",
+    "print-on-demand",
+    "made to order",
+    "made-to-order",
+    "custom print",
+    "custom made",
+    "unofficial",
+    "new print",
+    "modern print",
+    "recent print",
+    "remake",
+    "reissue",
+]
+
+MULTI_SIZE_PATTERNS = [
+    r"\bs\s*[-–]\s*5xl\b",
+    r"\bs\s*to\s*5xl\b",
+    r"\bs\s*[-–]\s*4xl\b",
+    r"\bs\s*to\s*4xl\b",
+    r"\bxs\s*[-–]\s*5xl\b",
+    r"\ball sizes\b",
+    r"\bchoose size\b",
+    r"\bselect size\b",
+    r"\bavailable in sizes\b",
+    r"\bsize options\b",
+    r"\bmultiple sizes\b",
+]
+
+MODERN_BODY_KEYWORDS = [
+    "gildan",
+    "comfort colors",
+    "bella canvas",
+    "bella+canvas",
+    "next level apparel",
+    "port & company",
+    "port and company",
+    "jerzees dri-power",
+    "shaka wear",
+]
+
+VINTAGE_POSITIVE_KEYWORDS = [
+    "giant",
+    "brockum",
+    "winterland",
+    "em winterland",
+    "fashion victim",
+    "screen stars",
+    "screen stars best",
+    "tee jays",
+    "all sport",
+    "oneita",
+    "wild oats",
+    "murina",
+    "changes",
+    "single stitch",
+    "single-stitch",
+    "made in usa",
+    "made in u.s.a",
+]
+
+
+# =========================================================
 # JSON 불러오기
 # =========================================================
 
@@ -707,6 +782,102 @@ def has_explicit_small_size(title: str) -> bool:
     )
 
 
+def build_item_text(
+    item: dict[str, Any],
+    detailed_item: dict[str, Any] | None = None,
+) -> str:
+    parts = [
+        str(item.get("title", "")),
+        str(item.get("shortDescription", "")),
+        str(item.get("condition", "")),
+        str(item.get("conditionDescription", "")),
+        str(item.get("brand", "")),
+    ]
+
+    source = detailed_item or item
+
+    parts.extend([
+        str(source.get("title", "")),
+        str(source.get("shortDescription", "")),
+        str(source.get("condition", "")),
+        str(source.get("conditionDescription", "")),
+        str(source.get("brand", "")),
+    ])
+
+    aspects = source.get("localizedAspects", [])
+
+    if isinstance(aspects, list):
+        for aspect in aspects:
+            if not isinstance(aspect, dict):
+                continue
+            parts.append(str(aspect.get("name", "")))
+            parts.append(str(aspect.get("value", "")))
+
+    return " ".join(parts).lower()
+
+
+def has_multi_size_pattern(text_value: str) -> bool:
+    return any(
+        re.search(pattern, text_value.lower())
+        for pattern in MULTI_SIZE_PATTERNS
+    )
+
+
+def evaluate_vintage_authenticity(
+    item: dict[str, Any],
+    detailed_item: dict[str, Any] | None = None,
+) -> tuple[bool, str, int]:
+    combined_text = build_item_text(
+        item,
+        detailed_item,
+    )
+
+    for keyword in REPRINT_HARD_KEYWORDS:
+        if keyword in combined_text:
+            return False, f"리프린트 신호: {keyword}", 0
+
+    if has_multi_size_pattern(combined_text):
+        return False, "다중 사이즈 주문형 상품", 0
+
+    modern_hits = [
+        keyword
+        for keyword in MODERN_BODY_KEYWORDS
+        if keyword in combined_text
+    ]
+
+    vintage_hits = [
+        keyword
+        for keyword in VINTAGE_POSITIVE_KEYWORDS
+        if keyword in combined_text
+    ]
+
+    if modern_hits and not vintage_hits:
+        return (
+            False,
+            f"현대 바디 신호: {modern_hits[0]}",
+            0,
+        )
+
+    score = min(len(vintage_hits) * 15, 60)
+
+    year = extract_listing_year(
+        str(item.get("title", ""))
+    )
+
+    if year is not None:
+        if 1980 <= year <= 1999:
+            score += 20
+        elif 2000 <= year <= 2005:
+            score += 5
+        elif year >= 2006:
+            score -= 25
+
+    if modern_hits:
+        score -= min(len(modern_hits) * 20, 40)
+
+    return True, "통과", max(score, 0)
+
+
 # =========================================================
 # 태그 감지 — 현재는 내부 참고용
 # =========================================================
@@ -822,6 +993,7 @@ def calculate_quality_score(item: dict[str, Any]) -> int:
             score -= 15
 
     score += min(int(item.get("_tag_score", 0)) // 2, 20)
+    score += min(int(item.get("_authenticity_score", 0)) // 2, 30)
 
     if "vintage" in title or "old" in title:
         score += 8
@@ -923,6 +1095,16 @@ def evaluate_auction(
     if price + shipping > MAX_ITEM_AND_US_SHIPPING_USD:
         return False, "예산 $250 초과", item
 
+    authenticity_passed, authenticity_reason, authenticity_score = (
+        evaluate_vintage_authenticity(
+            item,
+            detailed_item,
+        )
+    )
+
+    if not authenticity_passed:
+        return False, authenticity_reason, item
+
     tag_name, tag_score = detect_tag(
         title,
         tag_config,
@@ -946,6 +1128,7 @@ def evaluate_auction(
         ),
         "_tag_name": tag_name,
         "_tag_score": tag_score,
+        "_authenticity_score": authenticity_score,
     })
     processed["_quality_score"] = calculate_quality_score(processed)
 
@@ -1133,10 +1316,13 @@ def prepare_alert_items(
     fixed_items: list[dict[str, Any]],
     auction_items: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """
+    가격 비교 전에 후보를 버리지 않는다.
+    통과한 후보 전체를 호가 비교 단계로 넘긴다.
+    """
     fixed_items.sort(
         key=lambda item: (
             -int(item.get("_quality_score", 0)),
-            -tier_weight(item.get("_tier", "")),
             item.get("_age_minutes")
             if item.get("_age_minutes") is not None
             else float("inf"),
@@ -1146,33 +1332,13 @@ def prepare_alert_items(
     auction_items.sort(
         key=lambda item: (
             -int(item.get("_quality_score", 0)),
-            -tier_weight(item.get("_tier", "")),
             item.get("_hours_left")
             if item.get("_hours_left") is not None
             else float("inf"),
         )
     )
 
-    combined = fixed_items + auction_items
-
-    selected: list[dict[str, Any]] = []
-    artist_counts: dict[str, int] = {}
-
-    for item in combined:
-        artist = item.get("_artist", "알 수 없음")
-
-        current_count = artist_counts.get(artist, 0)
-
-        if current_count >= MAX_ALERTS_PER_ARTIST:
-            continue
-
-        selected.append(item)
-        artist_counts[artist] = current_count + 1
-
-        if len(selected) >= MAX_ALERTS_PER_RUN:
-            break
-
-    return selected
+    return fixed_items + auction_items
 
 
 
@@ -1600,6 +1766,23 @@ def main() -> None:
     alert_items = filter_undervalued_items(
         alert_items,
     )
+
+    final_alert_items: list[dict[str, Any]] = []
+    artist_counts: dict[str, int] = {}
+
+    for item in alert_items:
+        artist = item.get("_artist", "알 수 없음")
+
+        if artist_counts.get(artist, 0) >= MAX_ALERTS_PER_ARTIST:
+            continue
+
+        final_alert_items.append(item)
+        artist_counts[artist] = artist_counts.get(artist, 0) + 1
+
+        if len(final_alert_items) >= MAX_ALERTS_PER_RUN:
+            break
+
+    alert_items = final_alert_items
 
     print("=" * 70)
     print(f"검색된 경매: {len(auctions)}개")
