@@ -102,17 +102,19 @@ REPRINT_HARD_KEYWORDS = [
 ]
 
 MULTI_SIZE_PATTERNS = [
-    r"\bs\s*[-–]\s*5xl\b",
-    r"\bs\s*to\s*5xl\b",
-    r"\bs\s*[-–]\s*4xl\b",
-    r"\bs\s*to\s*4xl\b",
-    r"\bxs\s*[-–]\s*5xl\b",
+    r"\b(?:xs|s)\s*[-–]\s*(?:2xl|3xl|4xl|5xl|6xl)\b",
+    r"\b(?:xs|s)\s+to\s+(?:2xl|3xl|4xl|5xl|6xl)\b",
+    r"\b(?:s|m|l|xl)\s*[,/]\s*(?:m|l|xl|2xl)\b",
+    r"\bs\s+m\s+l\s+xl(?:\s+2xl)?(?:\s+3xl)?\b",
+    r"\bsmall\s+medium\s+large\s+(?:xl|x-large)\b",
     r"\ball sizes\b",
-    r"\bchoose size\b",
-    r"\bselect size\b",
-    r"\bavailable in sizes\b",
+    r"\bchoose (?:your )?size\b",
+    r"\bselect (?:your )?size\b",
+    r"\bavailable in (?:multiple )?sizes\b",
     r"\bsize options\b",
     r"\bmultiple sizes\b",
+    r"\bsizes available\b",
+    r"\bsize range\b",
 ]
 
 MODERN_BODY_KEYWORDS = [
@@ -823,6 +825,43 @@ def has_multi_size_pattern(text_value: str) -> bool:
     )
 
 
+def is_variation_listing(
+    item: dict[str, Any],
+    detailed_item: dict[str, Any] | None = None,
+) -> bool:
+    """사이즈/색상 선택형 variation 상품을 감지한다."""
+    for source in (item, detailed_item or {}):
+        if source.get("itemGroupHref"):
+            return True
+
+        if "VARIATION" in str(source.get("itemGroupType", "")).upper():
+            return True
+
+        aspects = source.get("localizedAspects", [])
+        if not isinstance(aspects, list):
+            continue
+
+        for aspect in aspects:
+            if not isinstance(aspect, dict):
+                continue
+
+            name = str(aspect.get("name", "")).lower()
+            value = str(aspect.get("value", "")).lower()
+
+            if name in {"size", "size type", "shirt size"}:
+                if has_multi_size_pattern(value):
+                    return True
+
+                size_tokens = re.findall(
+                    r"\b(?:xs|s|m|l|xl|2xl|3xl|4xl|5xl|xxl|xxxl)\b",
+                    value,
+                )
+                if len(set(size_tokens)) >= 3:
+                    return True
+
+    return False
+
+
 def evaluate_vintage_authenticity(
     item: dict[str, Any],
     detailed_item: dict[str, Any] | None = None,
@@ -835,6 +874,9 @@ def evaluate_vintage_authenticity(
     for keyword in REPRINT_HARD_KEYWORDS:
         if keyword in combined_text:
             return False, f"리프린트 신호: {keyword}", 0
+
+    if is_variation_listing(item, detailed_item):
+        return False, "사이즈/색상 선택형 variation 상품", 0
 
     if has_multi_size_pattern(combined_text):
         return False, "다중 사이즈 주문형 상품", 0
@@ -850,6 +892,20 @@ def evaluate_vintage_authenticity(
         for keyword in VINTAGE_POSITIVE_KEYWORDS
         if keyword in combined_text
     ]
+
+    price_value, _ = parse_amount(item.get("price"))
+    condition_text = " ".join([
+        str(item.get("condition", "")),
+        str((detailed_item or {}).get("condition", "")),
+    ]).lower()
+
+    if (
+        price_value is not None
+        and 15.0 <= price_value <= 35.0
+        and "new" in condition_text
+        and not vintage_hits
+    ):
+        return False, "저가 신품 리프린트 패턴", 0
 
     if modern_hits and not vintage_hits:
         return (
@@ -1181,6 +1237,23 @@ def evaluate_fixed_price(
     if price + shipping > MAX_ITEM_AND_US_SHIPPING_USD:
         return False, "예산 $250 초과", item
 
+    # 즉시구매도 상세정보를 조회해 variation / size / body 신호를 검사한다.
+    item_id = item.get("itemId")
+    if item_id and detailed_item is item:
+        try:
+            detailed_item = get_item_details(token, item_id)
+        except requests.RequestException as error:
+            print("즉시구매 상세조회 실패:", title)
+            print(error)
+            detailed_item = item
+
+    authenticity_passed, authenticity_reason, authenticity_score = (
+        evaluate_vintage_authenticity(item, detailed_item)
+    )
+
+    if not authenticity_passed:
+        return False, authenticity_reason, item
+
     age_minutes = get_listing_age_minutes(item)
 
     tag_name, tag_score = detect_tag(
@@ -1208,6 +1281,7 @@ def evaluate_fixed_price(
         ),
         "_tag_name": tag_name,
         "_tag_score": tag_score,
+        "_authenticity_score": authenticity_score,
         "_best_offer": (
             "BEST_OFFER" in buying_options
         ),
