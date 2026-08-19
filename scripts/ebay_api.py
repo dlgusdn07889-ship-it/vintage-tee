@@ -74,6 +74,30 @@ MIN_ASKING_DISCOUNT_PERCENT = 30.0
 
 
 # =========================================================
+# 90s-only Gate
+# =========================================================
+
+NINETIES_YEAR_MIN = 1990
+NINETIES_YEAR_MAX = 1999
+
+NINETIES_TEXT_PATTERNS = [
+    r"\b199\d\b",
+    r"\b90s\b",
+    r"\b90's\b",
+    r"\b1990s\b",
+]
+
+MODERN_YEAR_PATTERNS = [
+    r"\b200\d\b",
+    r"\b201\d\b",
+    r"\b202\d\b",
+    r"\b00s\b",
+    r"\b2000s\b",
+    r"\by2k\b",
+]
+
+
+# =========================================================
 # Anti-Reprint / Vintage Authenticity Gate
 # =========================================================
 
@@ -99,6 +123,13 @@ REPRINT_HARD_KEYWORDS = [
     "recent print",
     "remake",
     "reissue",
+    "tagless",
+    "no tag",
+    "no-tag",
+    "tag removed",
+    "printed tag",
+    "tear away tag",
+    "tearaway tag",
 ]
 
 MULTI_SIZE_PATTERNS = [
@@ -862,6 +893,73 @@ def is_variation_listing(
     return False
 
 
+def extract_all_years(text_value: str) -> list[int]:
+    return [
+        int(value)
+        for value in re.findall(r"\b(?:19\d{2}|20\d{2})\b", text_value)
+    ]
+
+
+def has_nineties_signal(text_value: str) -> bool:
+    normalized = text_value.lower()
+    years = extract_all_years(normalized)
+
+    if any(NINETIES_YEAR_MIN <= year <= NINETIES_YEAR_MAX for year in years):
+        return True
+
+    return any(
+        re.search(pattern, normalized)
+        for pattern in NINETIES_TEXT_PATTERNS
+    )
+
+
+def has_modern_year_signal(text_value: str) -> bool:
+    normalized = text_value.lower()
+    years = extract_all_years(normalized)
+
+    if any(year >= 2000 for year in years):
+        return True
+
+    return any(
+        re.search(pattern, normalized)
+        for pattern in MODERN_YEAR_PATTERNS
+    )
+
+
+def has_tag_evidence(text_value: str) -> bool:
+    normalized = text_value.lower()
+
+    positive_tag_terms = [
+        "giant",
+        "brockum",
+        "winterland",
+        "em winterland",
+        "fashion victim",
+        "screen stars",
+        "screen stars best",
+        "tee jays",
+        "all sport",
+        "oneita",
+        "wild oats",
+        "murina",
+        "changes",
+        "anvil",
+        "hanes",
+        "fruit of the loom",
+        "tultex",
+        "stedman",
+        "bay club",
+        "signal",
+        "delta",
+        "made in usa",
+        "made in u.s.a",
+        "single stitch",
+        "single-stitch",
+    ]
+
+    return any(term in normalized for term in positive_tag_terms)
+
+
 def evaluate_vintage_authenticity(
     item: dict[str, Any],
     detailed_item: dict[str, Any] | None = None,
@@ -870,6 +968,12 @@ def evaluate_vintage_authenticity(
         item,
         detailed_item,
     )
+
+    if has_modern_year_signal(combined_text):
+        return False, "2000년대 이후 연대 신호", 0
+
+    if not has_nineties_signal(combined_text):
+        return False, "90년대 근거 없음", 0
 
     for keyword in REPRINT_HARD_KEYWORDS:
         if keyword in combined_text:
@@ -892,6 +996,9 @@ def evaluate_vintage_authenticity(
         for keyword in VINTAGE_POSITIVE_KEYWORDS
         if keyword in combined_text
     ]
+
+    if not has_tag_evidence(combined_text):
+        return False, "빈티지 택/바디 근거 없음", 0
 
     price_value, _ = parse_amount(item.get("price"))
     condition_text = " ".join([
@@ -1043,10 +1150,8 @@ def calculate_quality_score(item: dict[str, Any]) -> int:
     if year is not None:
         if 1980 <= year <= 1999:
             score += 20
-        elif 2000 <= year <= 2005:
-            score += 5
-        elif year >= 2006:
-            score -= 15
+        elif year >= 2000:
+            score -= 30
 
     score += min(int(item.get("_tag_score", 0)) // 2, 20)
     score += min(int(item.get("_authenticity_score", 0)) // 2, 30)
