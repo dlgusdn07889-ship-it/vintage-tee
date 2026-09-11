@@ -1,167 +1,122 @@
 from __future__ import annotations
 
+import math
 import re
 from statistics import median
 from typing import Any
 
 import requests
 
-
 SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
 MARKETPLACE_ID = "EBAY_US"
 US_ZIP_CODE = "97250"
-
-MIN_REFERENCE_SAMPLES = 8
 MAX_REFERENCE_RESULTS = 100
-TRIM_RATIO = 0.15
 
 GENERIC_QUERY_WORDS = {
-    "vintage",
-    "shirt",
-    "shirts",
-    "tee",
-    "tees",
-    "tshirt",
-    "tshirts",
-    "t-shirt",
-    "t-shirts",
-    "band",
-    "tour",
-    "concert",
-    "single",
-    "stitch",
-    "old",
-    "graphic",
-    "mens",
-    "men",
-    "women",
-    "size",
-    "large",
-    "xl",
-    "xxl",
+    "vintage", "shirt", "shirts", "tee", "tees", "tshirt", "tshirts",
+    "t-shirt", "t-shirts", "band", "tour", "concert", "single", "stitch",
+    "old", "graphic", "mens", "men", "women", "size", "large", "xl", "xxl",
+    "90s", "1990s", "official", "original", "black", "usa", "made", "the",
+    "and", "for", "with", "from",
 }
 
 REFERENCE_EXCLUDE_KEYWORDS = [
-    "reprint",
-    "re-print",
-    "reproduction",
-    "replica",
-    "fake",
-    "modern",
-    "vintage style",
-    "vintage inspired",
-    "print on demand",
-    "made to order",
-    "custom print",
-    "custom made",
-    "unofficial",
-    "gildan",
-    "comfort colors",
-    "bella canvas",
-    "bella+canvas",
-    "kids",
-    "youth",
-    "toddler",
-    "infant",
-    "hoodie",
-    "sweatshirt",
-    "poster",
-    "patch",
-    "sticker",
+    "reprint", "re-print", "reproduction", "replica", "fake", "modern",
+    "vintage style", "vintage inspired", "retro style", "print on demand",
+    "made to order", "custom print", "custom made", "unofficial", "gildan",
+    "comfort colors", "bella canvas", "bella+canvas", "next level", "tagless",
+    "no tag", "printed tag", "tear away", "s-5xl", "s to 5xl", "choose size",
+    "select size", "multiple sizes", "hoodie", "sweatshirt", "poster", "patch",
+    "sticker", "kids", "youth", "toddler", "infant",
 ]
+
+MODERN_YEAR_RE = re.compile(r"\b(?:200\d|201\d|202\d)\b|\b(?:00s|2000s|y2k)\b", re.I)
+
+
+def _normalize(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
 
 
 def _parse_amount(data: Any) -> float | None:
     if not isinstance(data, dict):
         return None
-
-    raw_value = data.get("value")
-
-    if raw_value is None:
+    raw = data.get("value")
+    if raw is None:
         return None
-
     try:
-        value = float(raw_value)
+        value = float(raw)
     except (TypeError, ValueError):
         return None
-
     return value if value >= 0 else None
 
 
-def _get_shipping_cost(item: dict[str, Any]) -> float | None:
-    shipping_options = item.get("shippingOptions", [])
-
-    if not isinstance(shipping_options, list):
+def _shipping(item: dict[str, Any]) -> float | None:
+    options = item.get("shippingOptions", [])
+    if not isinstance(options, list):
         return None
-
-    for option in shipping_options:
+    for option in options:
         value = _parse_amount(option.get("shippingCost"))
-
         if value is not None:
             return value
-
     return None
 
 
-def _get_total_cost(item: dict[str, Any]) -> float | None:
+def _total(item: dict[str, Any]) -> float | None:
     price = _parse_amount(item.get("price"))
-
-    if price is None or price <= 0:
+    ship = _shipping(item)
+    if price is None or price <= 0 or ship is None:
         return None
-
-    shipping = _get_shipping_cost(item)
-
-    if shipping is None:
-        return None
-
-    return price + shipping
+    return price + ship
 
 
-def _normalize_text(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
-
-
-def _important_query_tokens(query: str) -> list[str]:
-    tokens = [
-        token
-        for token in _normalize_text(query).split()
+def _tokens(query: str) -> list[str]:
+    return list(dict.fromkeys(
+        token for token in _normalize(query).split()
         if len(token) >= 3 and token not in GENERIC_QUERY_WORDS
-    ]
-
-    return list(dict.fromkeys(tokens))
+    ))
 
 
-def _is_comparable_listing(
-    item: dict[str, Any],
-    query_tokens: list[str],
-) -> bool:
-    title = str(item.get("title", ""))
-    normalized_title = _normalize_text(title)
-
-    if not normalized_title:
+def _comparable(item: dict[str, Any], query_tokens: list[str]) -> bool:
+    title = _normalize(str(item.get("title", "")))
+    if not title:
+        return False
+    if any(keyword in title for keyword in REFERENCE_EXCLUDE_KEYWORDS):
+        return False
+    if MODERN_YEAR_RE.search(title):
         return False
 
-    if any(
-        keyword in normalized_title
-        for keyword in REFERENCE_EXCLUDE_KEYWORDS
-    ):
-        return False
-
-    # 검색어에서 뽑은 핵심 단어가 제목에 하나도 없으면 비교군에서 제외
-    if query_tokens and not any(
-        token in normalized_title
-        for token in query_tokens
-    ):
-        return False
-
+    if query_tokens:
+        hits = sum(1 for token in query_tokens if token in title)
+        required = 1 if len(query_tokens) == 1 else 2
+        if hits < required:
+            return False
     return True
 
 
+def _percentile(sorted_values: list[float], q: float) -> float:
+    if not sorted_values:
+        return 0.0
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    position = (len(sorted_values) - 1) * q
+    low = math.floor(position)
+    high = math.ceil(position)
+    if low == high:
+        return sorted_values[low]
+    fraction = position - low
+    return sorted_values[low] * (1 - fraction) + sorted_values[high] * fraction
+
+
 def get_active_price_reference(
+    *,
     token: str,
     query: str,
     maximum_results: int = MAX_REFERENCE_RESULTS,
 ) -> dict[str, Any] | None:
+    """
+    활성 즉시구매 매물의 보수적 가격 참고값.
+    sold price가 아니므로 실제 체결가로 해석하면 안 된다.
+    """
     response = requests.get(
         SEARCH_URL,
         headers={
@@ -174,68 +129,50 @@ def get_active_price_reference(
         params={
             "q": query,
             "limit": min(maximum_results, MAX_REFERENCE_RESULTS),
-            "filter": (
-                "buyingOptions:{FIXED_PRICE},"
-                "price:[20..1000],"
-                "priceCurrency:USD"
-            ),
-            "sort": "price",
+            "filter": "buyingOptions:{FIXED_PRICE},price:[40..1500],priceCurrency:USD",
         },
         timeout=30,
     )
-
     response.raise_for_status()
 
-    items = response.json().get("itemSummaries", [])
-    query_tokens = _important_query_tokens(query)
-
+    query_tokens = _tokens(query)
     totals: list[float] = []
-
-    for item in items:
-        if not _is_comparable_listing(item, query_tokens):
+    for item in response.json().get("itemSummaries", []):
+        if not _comparable(item, query_tokens):
             continue
+        total = _total(item)
+        if total is not None:
+            totals.append(total)
 
-        total_cost = _get_total_cost(item)
-
-        if total_cost is not None:
-            totals.append(total_cost)
-
-    if len(totals) < MIN_REFERENCE_SAMPLES:
+    if len(totals) < 3:
         return None
 
     totals.sort()
 
-    trim_count = int(len(totals) * TRIM_RATIO)
-
-    if trim_count > 0 and len(totals) - (trim_count * 2) >= MIN_REFERENCE_SAMPLES:
-        trimmed_totals = totals[trim_count:-trim_count]
+    if len(totals) >= 10:
+        trim = max(1, int(len(totals) * 0.10))
+        trimmed = totals[trim:-trim]
     else:
-        trimmed_totals = totals
+        trimmed = totals
 
-    if len(trimmed_totals) < MIN_REFERENCE_SAMPLES:
+    if len(trimmed) < 3:
         return None
 
-    reference_median = round(median(trimmed_totals), 2)
+    med = float(median(trimmed))
+    p25 = _percentile(trimmed, 0.25)
+    p40 = _percentile(trimmed, 0.40)
+    p75 = _percentile(trimmed, 0.75)
 
-    if reference_median <= 0:
+    if med <= 0 or p40 <= 0:
         return None
 
     return {
-        "median": reference_median,
-        "minimum": round(min(trimmed_totals), 2),
-        "maximum": round(max(trimmed_totals), 2),
-        "sample_count": len(trimmed_totals),
+        "median": round(med, 2),
+        "conservative": round(p40, 2),
+        "p25": round(p25, 2),
+        "p75": round(p75, 2),
+        "minimum": round(min(trimmed), 2),
+        "maximum": round(max(trimmed), 2),
+        "sample_count": len(trimmed),
+        "query": query,
     }
-
-
-def calculate_listing_discount(
-    total_cost: float,
-    reference_median: float,
-) -> float:
-    if total_cost <= 0 or reference_median <= 0:
-        return 0.0
-
-    return round(
-        ((reference_median - total_cost) / reference_median) * 100,
-        1,
-    )
