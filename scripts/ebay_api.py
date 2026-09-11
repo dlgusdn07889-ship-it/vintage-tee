@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 import random
@@ -9,469 +11,131 @@ from urllib.parse import quote
 
 import requests
 
+from deal_evaluator import classify_deal
 from exchange import usd_to_krw
+from market_reference import get_active_price_reference
 from telegram_alert import send_telegram_message
-from market_reference import (
-    calculate_listing_discount,
-    get_active_price_reference,
-)
-from deal_evaluator import (
-    calculate_expected_profit,
-    classify_deal,
-)
-
-
-# =========================================================
-# eBay 및 프로젝트 설정
-# =========================================================
-
-CLIENT_ID = os.environ["EBAY_CLIENT_ID"]
-CLIENT_SECRET = os.environ["EBAY_CLIENT_SECRET"]
 
 TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
 SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
 ITEM_URL = "https://api.ebay.com/buy/browse/v1/item"
-
 MARKETPLACE_ID = "EBAY_US"
+US_ZIP_CODE = "97250"
 
 RADAR_MODE = os.environ.get("RADAR_MODE", "ALL").upper()
-
 if RADAR_MODE not in {"ALL", "AUCTION", "FIXED_PRICE"}:
-    raise ValueError(
-        "RADAR_MODE must be ALL, AUCTION, or FIXED_PRICE"
-    )
+    raise ValueError("RADAR_MODE must be ALL, AUCTION, or FIXED_PRICE")
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 CONFIG_DIR = ROOT_DIR / "config"
 DATA_DIR = ROOT_DIR / "data"
 
+PROFILE_PATH = CONFIG_DIR / "hunter_profile.json"
 ARTIST_DATABASE_PATH = CONFIG_DIR / "artist_database.json"
 SEARCH_PATTERNS_PATH = CONFIG_DIR / "search_patterns.json"
 EXCLUDED_KEYWORDS_PATH = CONFIG_DIR / "excluded_keywords.json"
 TAG_BRANDS_PATH = CONFIG_DIR / "tag_brands.json"
 SEEN_ITEMS_PATH = DATA_DIR / f"seen_items_{RADAR_MODE.lower()}.json"
 
-# 현재는 부담 없는 매입가를 우선
-MAX_ITEM_AND_US_SHIPPING_USD = 250.0
-
-FORWARDING_FEE_USD = 10.0
-AUCTION_MAX_HOURS_LEFT = 24.0
-FIXED_PRICE_MAX_AGE_MINUTES = 20.0
-
-MAX_ALERTS_PER_RUN = 5
-SEARCH_LIMIT_PER_QUERY = 50
-
-# 실행당 검색 비율
-TIER_1_ARTISTS_PER_RUN = 6
-TIER_2_ARTISTS_PER_RUN = 3
-TIER_3_ARTISTS_PER_RUN = 1
-
-# 한 아티스트가 알림을 독점하지 못하게 제한
-MAX_ALERTS_PER_ARTIST = 1
-
-
-MIN_ASKING_DISCOUNT_PERCENT = 30.0
-
-
-# =========================================================
-# 90s-only Gate
-# =========================================================
-
-NINETIES_YEAR_MIN = 1990
-NINETIES_YEAR_MAX = 1999
-
-NINETIES_TEXT_PATTERNS = [
-    r"\b199\d\b",
-    r"\b90s\b",
-    r"\b90's\b",
-    r"\b1990s\b",
-]
-
-MODERN_YEAR_PATTERNS = [
-    r"\b200\d\b",
-    r"\b201\d\b",
-    r"\b202\d\b",
-    r"\b00s\b",
-    r"\b2000s\b",
-    r"\by2k\b",
-]
-
-
-# =========================================================
-# Anti-Reprint / Vintage Authenticity Gate
-# =========================================================
-
-REPRINT_HARD_KEYWORDS = [
-    "reprint",
-    "re-print",
-    "reproduction",
-    "replica",
-    "vintage style",
-    "vintage-style",
-    "retro style",
-    "retro-style",
-    "vintage inspired",
-    "print on demand",
-    "print-on-demand",
-    "made to order",
-    "made-to-order",
-    "custom print",
-    "custom made",
-    "unofficial",
-    "new print",
-    "modern print",
-    "recent print",
-    "remake",
-    "reissue",
-    "tagless",
-    "no tag",
-    "no-tag",
-    "tag removed",
-    "printed tag",
-    "tear away tag",
-    "tearaway tag",
-]
+ARTIST_ALIASES: dict[str, list[str]] = {
+    "ACDC": ["AC/DC", "AC DC", "ACDC"],
+    "Guns N Roses": ["Guns N' Roses", "Guns N Roses", "GNR"],
+    "Mötley Crüe": ["Motley Crue", "Mötley Crüe"],
+    "Motorhead": ["Motörhead", "Motorhead"],
+    "Notorious BIG": ["The Notorious B.I.G.", "Notorious BIG", "Biggie Smalls", "Biggie"],
+    "Run DMC": ["Run-D.M.C.", "Run DMC"],
+    "Wu-Tang Clan": ["Wu-Tang Clan", "Wu Tang Clan", "Wu-Tang"],
+    "Tupac": ["Tupac", "2Pac", "Makaveli"],
+    "Red Hot Chili Peppers": ["Red Hot Chili Peppers", "RHCP"],
+    "Rage Against the Machine": ["Rage Against the Machine", "RATM"],
+    "Nine Inch Nails": ["Nine Inch Nails", "NIN"],
+    "Alice in Chains": ["Alice in Chains", "AIC"],
+}
 
 MULTI_SIZE_PATTERNS = [
     r"\b(?:xs|s)\s*[-–]\s*(?:2xl|3xl|4xl|5xl|6xl)\b",
     r"\b(?:xs|s)\s+to\s+(?:2xl|3xl|4xl|5xl|6xl)\b",
     r"\b(?:s|m|l|xl)\s*[,/]\s*(?:m|l|xl|2xl)\b",
     r"\bs\s+m\s+l\s+xl(?:\s+2xl)?(?:\s+3xl)?\b",
-    r"\bsmall\s+medium\s+large\s+(?:xl|x-large)\b",
     r"\ball sizes\b",
     r"\bchoose (?:your )?size\b",
     r"\bselect (?:your )?size\b",
     r"\bavailable in (?:multiple )?sizes\b",
-    r"\bsize options\b",
     r"\bmultiple sizes\b",
-    r"\bsizes available\b",
-    r"\bsize range\b",
+    r"\bsize options\b",
 ]
 
-MODERN_BODY_KEYWORDS = [
-    "gildan",
-    "comfort colors",
-    "bella canvas",
-    "bella+canvas",
-    "next level apparel",
-    "port & company",
-    "port and company",
-    "jerzees dri-power",
-    "shaka wear",
+SMALL_SIZE_PATTERNS = [
+    r"\bsize\s*xs\b", r"\bextra[\s-]?small\b", r"\bsize\s*small\b",
+    r"\bsize\s*s\b", r"\bmens?\s+small\b", r"\bwomens?\s+small\b",
+    r"\bladies\s+small\b",
 ]
 
-VINTAGE_POSITIVE_KEYWORDS = [
-    "giant",
-    "brockum",
-    "winterland",
-    "em winterland",
-    "fashion victim",
-    "screen stars",
-    "screen stars best",
-    "tee jays",
-    "all sport",
-    "oneita",
-    "wild oats",
-    "murina",
-    "changes",
-    "single stitch",
-    "single-stitch",
-    "made in usa",
-    "made in u.s.a",
-]
+YEAR_RE = re.compile(r"\b(?:19\d{2}|20\d{2})\b")
+NINETIES_RE = re.compile(r"\b199\d\b|\b90'?s\b|\b1990s\b", re.I)
+MODERN_YEAR_RE = re.compile(r"\b(?:200\d|201\d|202\d)\b|\b(?:00s|2000s|y2k)\b", re.I)
 
+API_CALLS = {"search": 0, "detail": 0, "reference": 0}
 
-# =========================================================
-# JSON 불러오기
-# =========================================================
 
 def load_json(path: Path, default: Any) -> Any:
     if not path.exists():
         print(f"설정 파일 없음: {path}")
         return default
-
-    with path.open("r", encoding="utf-8") as file:
-        return json.load(file)
-
-
-def load_configs() -> tuple[
-    dict[str, Any],
-    dict[str, Any],
-    dict[str, Any],
-    dict[str, Any],
-]:
-    artist_database = load_json(
-        ARTIST_DATABASE_PATH,
-        {
-            "tier_1": [],
-            "tier_2": [],
-            "tier_3": [],
-        },
-    )
-
-    search_patterns = load_json(
-        SEARCH_PATTERNS_PATH,
-        {
-            "top_priority_patterns": [
-                "{subject} shirt",
-                "{subject} tee",
-            ],
-            "normal_patterns": [
-                "{subject} shirt",
-                "{subject} tee",
-            ],
-        },
-    )
-
-    excluded_keywords = load_json(
-        EXCLUDED_KEYWORDS_PATH,
-        {
-            "hard_exclude": [],
-            "soft_warning": [],
-        },
-    )
-
-    tag_brands = load_json(
-        TAG_BRANDS_PATH,
-        {
-            "tag_scores": {},
-            "tag_aliases": {},
-        },
-    )
-
-    return (
-        artist_database,
-        search_patterns,
-        excluded_keywords,
-        tag_brands,
-    )
+    with path.open("r", encoding="utf-8") as fh:
+        return json.load(fh)
 
 
-# =========================================================
-# 중복 알림 기록
-# =========================================================
-
-def load_seen_item_ids() -> set[str]:
-    data = load_json(
-        SEEN_ITEMS_PATH,
-        {"item_ids": []},
-    )
-
-    return set(data.get("item_ids", []))
+def load_configs() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    profile = load_json(PROFILE_PATH, {})
+    artist_db = load_json(ARTIST_DATABASE_PATH, {"tiers": {}})
+    patterns = load_json(SEARCH_PATTERNS_PATH, {})
+    excludes = load_json(EXCLUDED_KEYWORDS_PATH, {"hard_exclude": [], "soft_warning": []})
+    tags = load_json(TAG_BRANDS_PATH, {"strong_tags": {}, "supporting_tags": {}, "modern_tags": [], "aliases": {}})
+    return profile, artist_db, patterns, excludes, tags
 
 
-def save_seen_item_ids(item_ids: set[str]) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-    # 지나치게 커지지 않도록 최대 5,000개 보관
-    trimmed_ids = sorted(item_ids)[-5000:]
-
-    with SEEN_ITEMS_PATH.open(
-        "w",
-        encoding="utf-8",
-    ) as file:
-        json.dump(
-            {"item_ids": trimmed_ids},
-            file,
-            ensure_ascii=False,
-            indent=2,
-        )
+def normalize(value: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", value.lower()).split())
 
 
-# =========================================================
-# 검색 아티스트 및 검색어 선택
-# =========================================================
-
-def pick_rotating_items(
-    items: list[dict[str, Any]],
-    count: int,
-    slot_number: int,
-    offset_multiplier: int,
-) -> list[dict[str, Any]]:
-    if not items or count <= 0:
-        return []
-
-    count = min(count, len(items))
-    start_index = (
-        slot_number * count * offset_multiplier
-    ) % len(items)
-
-    return [
-        items[(start_index + offset) % len(items)]
-        for offset in range(count)
-    ]
+def parse_amount(data: Any) -> tuple[float | None, str]:
+    if not isinstance(data, dict):
+        return None, "USD"
+    raw = data.get("value")
+    if raw is None:
+        return None, str(data.get("currency", "USD"))
+    try:
+        return float(raw), str(data.get("currency", "USD"))
+    except (TypeError, ValueError):
+        return None, str(data.get("currency", "USD"))
 
 
-def normalize_artist_database(
-    artist_database: dict[str, Any],
-) -> dict[str, list[dict[str, Any]]]:
-    if "tiers" in artist_database:
-        raw_tiers = artist_database.get("tiers", {})
-    else:
-        raw_tiers = artist_database
+def get_shipping(item: dict[str, Any]) -> float | None:
+    options = item.get("shippingOptions", [])
+    if not isinstance(options, list):
+        return None
+    for option in options:
+        value, _ = parse_amount(option.get("shippingCost"))
+        if value is not None:
+            return value
+    return None
 
-    normalized = {
-        "tier_1": [],
-        "tier_2": [],
-        "tier_3": [],
-    }
-
-    for tier_name in normalized:
-        for entry in raw_tiers.get(tier_name, []):
-            if isinstance(entry, str):
-                normalized[tier_name].append({
-                    "name": entry,
-                    "keywords": [entry],
-                })
-                continue
-
-            if not isinstance(entry, dict):
-                continue
-
-            name = str(entry.get("name", "")).strip()
-            keywords = [
-                str(value).strip()
-                for value in entry.get("keywords", [])
-                if str(value).strip()
-            ]
-
-            if not name:
-                continue
-
-            if name not in keywords:
-                keywords.insert(0, name)
-
-            normalized[tier_name].append({
-                "name": name,
-                "keywords": list(dict.fromkeys(keywords)),
-            })
-
-    return normalized
-
-
-def select_artists(
-    artist_database: dict[str, Any],
-) -> list[tuple[dict[str, Any], str]]:
-    slot_number = int(
-        datetime.now(timezone.utc).timestamp() // 600
-    )
-
-    database = normalize_artist_database(
-        artist_database
-    )
-
-    selected = []
-
-    for artist_entry in pick_rotating_items(
-        database["tier_1"],
-        TIER_1_ARTISTS_PER_RUN,
-        slot_number,
-        1,
-    ):
-        selected.append((artist_entry, "tier_1"))
-
-    for artist_entry in pick_rotating_items(
-        database["tier_2"],
-        TIER_2_ARTISTS_PER_RUN,
-        slot_number,
-        3,
-    ):
-        selected.append((artist_entry, "tier_2"))
-
-    for artist_entry in pick_rotating_items(
-        database["tier_3"],
-        TIER_3_ARTISTS_PER_RUN,
-        slot_number,
-        7,
-    ):
-        selected.append((artist_entry, "tier_3"))
-
-    random.Random(slot_number).shuffle(selected)
-    return selected
-
-
-def build_queries(
-    selected_artists: list[tuple[dict[str, Any], str]],
-    search_patterns: dict[str, Any],
-) -> list[dict[str, Any]]:
-    top_patterns = search_patterns.get(
-        "top_priority_patterns",
-        ["{subject} shirt", "{subject} tee"],
-    )
-    normal_patterns = search_patterns.get(
-        "normal_patterns",
-        ["{subject} shirt", "{subject} tee"],
-    )
-
-    slot_number = int(
-        datetime.now(timezone.utc).timestamp() // 600
-    )
-
-    queries = []
-
-    for index, (artist_entry, tier) in enumerate(
-        selected_artists
-    ):
-        artist = artist_entry["name"]
-        keywords = artist_entry.get("keywords", [artist])
-        patterns = (
-            top_patterns
-            if tier == "tier_1"
-            else normal_patterns
-        )
-
-        keyword_index = (
-            slot_number + index * 3
-        ) % len(keywords)
-        pattern_index = (
-            slot_number + index
-        ) % len(patterns)
-
-        subject = keywords[keyword_index]
-        query = patterns[pattern_index].format(
-            subject=subject
-        )
-
-        queries.append({
-            "artist": artist,
-            "tier": tier,
-            "query": query,
-            "subject": subject,
-            "match_terms": keywords,
-        })
-
-    return queries
-
-
-# =========================================================
-# eBay 인증 및 요청
-# =========================================================
 
 def get_access_token() -> str:
+    client_id = os.environ["EBAY_CLIENT_ID"]
+    client_secret = os.environ["EBAY_CLIENT_SECRET"]
     response = requests.post(
         TOKEN_URL,
-        auth=(CLIENT_ID, CLIENT_SECRET),
-        headers={
-            "Content-Type":
-                "application/x-www-form-urlencoded",
-        },
-        data={
-            "grant_type": "client_credentials",
-            "scope":
-                "https://api.ebay.com/oauth/api_scope",
-        },
+        auth=(client_id, client_secret),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        data={"grant_type": "client_credentials", "scope": "https://api.ebay.com/oauth/api_scope"},
         timeout=30,
     )
-
     response.raise_for_status()
-
     token = response.json().get("access_token")
-
     if not token:
-        raise RuntimeError(
-            "eBay 액세스 토큰을 받지 못했습니다."
-        )
-
+        raise RuntimeError("eBay 액세스 토큰을 받지 못했습니다.")
     return token
 
 
@@ -479,1512 +143,622 @@ def ebay_headers(token: str) -> dict[str, str]:
     return {
         "Authorization": f"Bearer {token}",
         "X-EBAY-C-MARKETPLACE-ID": MARKETPLACE_ID,
-        "X-EBAY-C-ENDUSERCTX": (
-            "contextualLocation=country%3DUS%2Czip%3D97250"
-        ),
+        "X-EBAY-C-ENDUSERCTX": f"contextualLocation=country%3DUS%2Czip%3D{US_ZIP_CODE}",
     }
 
 
-def search_one_query(
-    token: str,
-    query: str,
-    buying_option: str,
-) -> list[dict[str, Any]]:
-    sort_value = (
-        "endingSoonest"
-        if buying_option == "AUCTION"
-        else "newlyListed"
-    )
-
+def search_one_query(token: str, query: str, buying_option: str, max_price: float, limit: int) -> list[dict[str, Any]]:
+    API_CALLS["search"] += 1
     response = requests.get(
         SEARCH_URL,
         headers=ebay_headers(token),
         params={
             "q": query,
-            "limit": SEARCH_LIMIT_PER_QUERY,
-            "filter": (
-                f"buyingOptions:{{{buying_option}}},"
-                f"price:[..{MAX_ITEM_AND_US_SHIPPING_USD}],"
-                "priceCurrency:USD"
-            ),
-            "sort": sort_value,
+            "limit": limit,
+            "filter": f"buyingOptions:{{{buying_option}}},price:[..{max_price}],priceCurrency:USD",
+            "sort": "endingSoonest" if buying_option == "AUCTION" else "newlyListed",
         },
         timeout=30,
     )
-
     response.raise_for_status()
-
-    return response.json().get(
-        "itemSummaries",
-        [],
-    )
+    return response.json().get("itemSummaries", [])
 
 
-def get_item_details(
-    token: str,
-    item_id: str,
-) -> dict[str, Any]:
-    encoded_item_id = quote(item_id, safe="")
-
+def get_item_details(token: str, item_id: str) -> dict[str, Any]:
+    API_CALLS["detail"] += 1
     response = requests.get(
-        f"{ITEM_URL}/{encoded_item_id}",
+        f"{ITEM_URL}/{quote(item_id, safe='')}",
         headers=ebay_headers(token),
         timeout=30,
     )
-
     response.raise_for_status()
-
     return response.json()
 
 
-# =========================================================
-# 가격 및 배송비
-# =========================================================
-
-def parse_amount(
-    amount_data: Any,
-) -> tuple[float | None, str]:
-    if not isinstance(amount_data, dict):
-        return None, "USD"
-
-    raw_value = amount_data.get("value")
-    currency = amount_data.get("currency", "USD")
-
-    if raw_value is None:
-        return None, currency
-
-    try:
-        return float(raw_value), currency
-    except (TypeError, ValueError):
-        return None, currency
+def normalize_artist_database(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    raw = data.get("tiers", data)
+    result = {"tier_1": [], "tier_2": [], "tier_3": []}
+    for tier in result:
+        for entry in raw.get(tier, []):
+            if isinstance(entry, str):
+                result[tier].append({"name": entry, "keywords": [entry]})
+                continue
+            if not isinstance(entry, dict):
+                continue
+            name = str(entry.get("name", "")).strip()
+            if not name:
+                continue
+            keywords = [str(v).strip() for v in entry.get("keywords", []) if str(v).strip()]
+            if name not in keywords:
+                keywords.insert(0, name)
+            result[tier].append({"name": name, "keywords": list(dict.fromkeys(keywords))})
+    return result
 
 
-def get_shipping_cost(
-    item: dict[str, Any],
-) -> float | None:
-    shipping_options = item.get(
-        "shippingOptions",
-        [],
-    )
+def rotating_slice(items: list[dict[str, Any]], count: int, slot: int, multiplier: int) -> list[dict[str, Any]]:
+    if not items or count <= 0:
+        return []
+    count = min(count, len(items))
+    start = (slot * count * multiplier) % len(items)
+    return [items[(start + i) % len(items)] for i in range(count)]
 
-    if not isinstance(shipping_options, list):
-        return None
 
-    for option in shipping_options:
-        shipping_cost, _ = parse_amount(
-            option.get("shippingCost")
-        )
+def choose_artists(profile: dict[str, Any], artist_db: dict[str, Any]) -> list[tuple[dict[str, Any], str]]:
+    search = profile["search"]
+    slot_seconds = 600 if RADAR_MODE == "FIXED_PRICE" else 3600
+    slot = int(datetime.now(timezone.utc).timestamp() // slot_seconds)
+    db = normalize_artist_database(artist_db)
+    selected: list[tuple[dict[str, Any], str]] = []
+    specs = [
+        ("tier_1", int(search["tier_1_artists_per_run"]), 1),
+        ("tier_2", int(search["tier_2_artists_per_run"]), 3),
+        ("tier_3", int(search["tier_3_artists_per_run"]), 7),
+    ]
+    for tier, count, mult in specs:
+        for artist in rotating_slice(db[tier], count, slot, mult):
+            selected.append((artist, tier))
+    random.Random(slot).shuffle(selected)
+    return selected
 
-        if shipping_cost is not None:
-            return shipping_cost
 
+def artist_query_name(artist: str, patterns: dict[str, Any]) -> str:
+    ambiguous = {normalize(v) for v in patterns.get("ambiguous_artists", [])}
+    if normalize(artist) in ambiguous:
+        return f"{artist} {patterns.get('ambiguous_artist_suffix', 'band')}"
+    return artist
+
+
+def build_queries(profile: dict[str, Any], selected: list[tuple[dict[str, Any], str]], patterns: dict[str, Any]) -> list[dict[str, Any]]:
+    slot_seconds = 600 if RADAR_MODE == "FIXED_PRICE" else 3600
+    slot = int(datetime.now(timezone.utc).timestamp() // slot_seconds)
+    broad_patterns = patterns.get("tier_1_broad_patterns", ["{artist} vintage shirt"])
+    specific_patterns = patterns.get("specific_patterns", ["{artist} {subject} shirt"])
+    queries: list[dict[str, Any]] = []
+
+    for index, (entry, tier) in enumerate(selected):
+        artist = entry["name"]
+        query_artist = artist_query_name(artist, patterns)
+        keywords = entry.get("keywords", [artist])
+        specific_keywords = [k for k in keywords if normalize(k) != normalize(artist)] or [artist]
+        subject = specific_keywords[(slot + index * 3) % len(specific_keywords)]
+        specific = specific_patterns[(slot + index) % len(specific_patterns)].format(artist=query_artist, subject=subject)
+        queries.append({
+            "artist": artist,
+            "tier": tier,
+            "subject": subject,
+            "query": specific,
+            "specific": True,
+            "keywords": keywords,
+        })
+        if tier == "tier_1":
+            broad = broad_patterns[(slot + index) % len(broad_patterns)].format(artist=query_artist, subject=artist)
+            queries.append({
+                "artist": artist,
+                "tier": tier,
+                "subject": artist,
+                "query": broad,
+                "specific": False,
+                "keywords": keywords,
+            })
+
+    dedup: dict[str, dict[str, Any]] = {}
+    for entry in queries:
+        dedup[normalize(entry["query"])] = entry
+    return list(dedup.values())
+
+
+def title_matches_artist(title: str, artist: str) -> bool:
+    normalized_title = normalize(title)
+    candidates = ARTIST_ALIASES.get(artist, [artist])
+    return any(normalize(candidate) in normalized_title for candidate in candidates if normalize(candidate))
+
+
+def contains_keyword(text: str, keywords: list[str]) -> str | None:
+    low = text.lower()
+    for keyword in keywords:
+        if keyword.lower() in low:
+            return keyword
     return None
 
 
-def resolve_shipping_cost(
-    token: str,
-    item: dict[str, Any],
-    detailed_item: dict[str, Any] | None = None,
-) -> tuple[float | None, dict[str, Any]]:
-    """미국 배대지 ZIP 기준 배송비를 최대한 안전하게 확인한다."""
-    shipping = get_shipping_cost(item)
+def has_multi_size(text: str) -> bool:
+    return any(re.search(pattern, text.lower()) for pattern in MULTI_SIZE_PATTERNS)
 
-    if shipping is not None:
-        return shipping, detailed_item or item
 
-    if detailed_item is not None:
-        shipping = get_shipping_cost(detailed_item)
-        if shipping is not None:
-            return shipping, detailed_item
+def explicit_small_size(text: str) -> bool:
+    return any(re.search(pattern, text.lower()) for pattern in SMALL_SIZE_PATTERNS)
 
-    item_id = item.get("itemId")
-    if not item_id:
-        return None, detailed_item or item
 
+def is_variation(item: dict[str, Any]) -> bool:
+    if item.get("itemGroupHref"):
+        return True
+    if "VARIATION" in str(item.get("itemGroupType", "")).upper():
+        return True
+    return False
+
+
+def build_item_text(item: dict[str, Any]) -> str:
+    parts = [
+        str(item.get("title", "")), str(item.get("shortDescription", "")),
+        str(item.get("condition", "")), str(item.get("conditionDescription", "")),
+        str(item.get("brand", "")),
+    ]
+    aspects = item.get("localizedAspects", [])
+    if isinstance(aspects, list):
+        for aspect in aspects:
+            if isinstance(aspect, dict):
+                parts.append(str(aspect.get("name", "")))
+                parts.append(str(aspect.get("value", "")))
+    return " ".join(parts)
+
+
+def detect_tag(text: str, tag_config: dict[str, Any]) -> tuple[str | None, int, bool]:
+    low = text.lower()
+    strong = tag_config.get("strong_tags", {})
+    supporting = tag_config.get("supporting_tags", {})
+    aliases = tag_config.get("aliases", {})
+
+    for alias, canonical in aliases.items():
+        if alias.lower() in low:
+            score = int(strong.get(canonical, supporting.get(canonical, 0)))
+            return canonical, score, canonical in strong
+
+    all_tags = {**supporting, **strong}
+    for name in sorted(all_tags, key=len, reverse=True):
+        if name.lower() in low:
+            return name, int(all_tags[name]), name in strong
+    return None, 0, False
+
+
+def authenticity_check(item: dict[str, Any], profile: dict[str, Any], excludes: dict[str, Any], tags: dict[str, Any]) -> tuple[bool, str, dict[str, Any]]:
+    text = build_item_text(item)
+    low = text.lower()
+    auth = profile["authenticity"]
+    era = profile["era"]
+
+    hard_hit = contains_keyword(text, excludes.get("hard_exclude", []))
+    if hard_hit:
+        return False, f"제외 키워드: {hard_hit}", {}
+    if auth.get("reject_variations", True) and is_variation(item):
+        return False, "사이즈/색상 선택형 variation", {}
+    if has_multi_size(text):
+        return False, "다중 사이즈 주문형", {}
+    if auth.get("reject_modern_years", True) and MODERN_YEAR_RE.search(text):
+        return False, "2000년대 이후 연대 신호", {}
+
+    modern_tag = contains_keyword(text, tags.get("modern_tags", []))
+    if auth.get("reject_modern_bodies", True) and modern_tag:
+        return False, f"현대 바디: {modern_tag}", {}
+
+    tag_name, tag_score, strong_tag = detect_tag(text, tags)
+    if auth.get("reject_no_tag", True) and not tag_name:
+        return False, "확인 가능한 빈티지 택 없음", {}
+
+    years = [int(v) for v in YEAR_RE.findall(text)]
+    era_years = [y for y in years if int(era["min_year"]) <= y <= int(era["max_year"])]
+    explicit_90s = bool(era_years or NINETIES_RE.search(text))
+    single_stitch = "single stitch" in low or "single-stitch" in low
+    made_usa = "made in usa" in low or "made in u.s.a" in low or "made in u.s.a." in low
+
+    if era.get("require_era_evidence", True) and not explicit_90s:
+        allow_strong = bool(era.get("allow_strong_body_without_explicit_year", True))
+        if not (allow_strong and strong_tag and (single_stitch or made_usa)):
+            return False, "90년대 근거 부족", {}
+
+    if tag_name and not strong_tag and not (explicit_90s and (single_stitch or made_usa)):
+        return False, f"{tag_name} 연대 근거 부족", {}
+
+    score = tag_score
+    reasons = [f"Tag {tag_name}"] if tag_name else []
+    if explicit_90s:
+        score += 35
+        reasons.append(str(min(era_years)) if era_years else "90s")
+    if single_stitch:
+        score += 20
+        reasons.append("Single Stitch")
+    if made_usa:
+        score += 15
+        reasons.append("Made in USA")
+    if "copyright" in low or "licensed" in low or "licenced" in low:
+        score += 8
+        reasons.append("Copyright/License")
+    if "used" in low or "pre-owned" in low or "preowned" in low:
+        score += 5
+
+    if score < int(auth.get("minimum_score", 50)):
+        return False, f"빈티지 신뢰도 {score}점", {}
+
+    warnings = [kw for kw in excludes.get("soft_warning", []) if kw.lower() in low]
+    return True, "통과", {
+        "authenticity_score": score,
+        "authenticity_reasons": reasons,
+        "warnings": warnings,
+        "tag_name": tag_name,
+        "era_year": min(era_years) if era_years else None,
+    }
+
+
+def prefilter_summary(item: dict[str, Any], meta: dict[str, Any], excludes: dict[str, Any]) -> tuple[bool, str]:
+    title = str(item.get("title", ""))
+    if not title_matches_artist(title, meta["artist"]):
+        return False, "아티스트 불일치"
+    hit = contains_keyword(title, excludes.get("hard_exclude", []))
+    if hit:
+        return False, f"제외 키워드: {hit}"
+    if MODERN_YEAR_RE.search(title):
+        return False, "현대 연대"
+    if has_multi_size(title):
+        return False, "다중 사이즈"
+    if explicit_small_size(title):
+        return False, "작은 사이즈"
+    return True, "통과"
+
+
+def summary_priority(item: dict[str, Any], meta: dict[str, Any], tags: dict[str, Any]) -> int:
+    title = str(item.get("title", ""))
+    low = title.lower()
+    score = {"tier_1": 45, "tier_2": 28, "tier_3": 15}.get(meta["tier"], 0)
+    if meta.get("specific"):
+        score += 20
+        if normalize(meta.get("subject", "")) in normalize(title):
+            score += 15
+    if NINETIES_RE.search(title):
+        score += 30
+    _, tag_score, strong_tag = detect_tag(title, tags)
+    score += min(tag_score, 30)
+    if strong_tag:
+        score += 10
+    if "single stitch" in low or "single-stitch" in low:
+        score += 20
+    if "made in usa" in low or "made in u.s.a" in low:
+        score += 15
+    if "vintage" in low:
+        score += 5
+    watch = item.get("watchCount")
     try:
-        fetched_details = get_item_details(token, item_id)
-    except requests.RequestException as error:
-        print(
-            "배송비 상세조회 실패:",
-            item.get("title", "제목 없음"),
-        )
-        print(error)
-        return None, detailed_item or item
-
-    return get_shipping_cost(fetched_details), fetched_details
-
-
-def get_fixed_price(
-    item: dict[str, Any],
-) -> tuple[float | None, str]:
-    return parse_amount(item.get("price"))
+        if watch is not None:
+            score += min(int(watch), 40) // 2
+    except (TypeError, ValueError):
+        pass
+    try:
+        score += min(int(item.get("bidCount", 0) or 0), 10)
+    except (TypeError, ValueError):
+        pass
+    return score
 
 
-def get_auction_price(
-    item: dict[str, Any],
-) -> tuple[float | None, str, str]:
-    current_bid, currency = parse_amount(
-        item.get("currentBidPrice")
-    )
-
-    if current_bid is not None and current_bid > 0:
-        return current_bid, currency, "현재 입찰가"
-
-    minimum_bid, currency = parse_amount(
-        item.get("minimumPriceToBid")
-    )
-
-    if minimum_bid is not None and minimum_bid > 0:
-        bid_count = int(item.get("bidCount", 0) or 0)
-
-        label = (
-            "다음 최소 입찰가"
-            if bid_count > 0
-            else "시작가"
-        )
-
-        return minimum_bid, currency, label
-
+def price_for_listing(item: dict[str, Any], listing_type: str) -> tuple[float | None, str, str]:
+    if listing_type == "FIXED_PRICE":
+        price, currency = parse_amount(item.get("price"))
+        return price, currency, "즉시구매가"
+    current, currency = parse_amount(item.get("currentBidPrice"))
+    if current is not None and current > 0:
+        return current, currency, "현재 입찰가"
+    minimum, currency = parse_amount(item.get("minimumPriceToBid"))
+    if minimum is not None and minimum > 0:
+        return minimum, currency, "다음 최소 입찰가" if int(item.get("bidCount", 0) or 0) else "시작가"
     price, currency = parse_amount(item.get("price"))
-
-    if price is not None and price > 0:
-        return price, currency, "시작가"
-
-    return None, "USD", "가격 확인 필요"
+    return price, currency, "시작가"
 
 
-def resolve_auction_price(
-    token: str,
-    item: dict[str, Any],
-) -> tuple[float | None, str, str, dict[str, Any]]:
-    price, currency, label = get_auction_price(item)
-
-    if price is not None:
-        return price, currency, label, item
-
-    item_id = item.get("itemId")
-
-    if not item_id:
-        return None, "USD", "가격 확인 필요", item
-
-    try:
-        detailed_item = get_item_details(
-            token,
-            item_id,
-        )
-    except requests.RequestException as error:
-        print(
-            "상품 상세조회 실패:",
-            item.get("title", "제목 없음"),
-        )
-        print(error)
-
-        return None, "USD", "가격 확인 필요", item
-
-    price, currency, label = get_auction_price(
-        detailed_item
-    )
-
-    return price, currency, label, detailed_item
-
-
-# =========================================================
-# 시간 처리
-# =========================================================
-
-def parse_ebay_datetime(
-    value: str | None,
-) -> datetime | None:
+def parse_ebay_time(value: str | None) -> datetime | None:
     if not value:
         return None
-
     try:
-        return datetime.fromisoformat(
-            value.replace("Z", "+00:00")
-        )
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
 
 
-def get_hours_left(
-    end_date: str | None,
-) -> float | None:
-    end_time = parse_ebay_datetime(end_date)
-
-    if end_time is None:
+def hours_left(item: dict[str, Any]) -> float | None:
+    end = parse_ebay_time(item.get("itemEndDate"))
+    if not end:
         return None
-
-    return (
-        end_time - datetime.now(timezone.utc)
-    ).total_seconds() / 3600
+    return (end - datetime.now(timezone.utc)).total_seconds() / 3600
 
 
-def get_listing_age_minutes(
-    item: dict[str, Any],
-) -> float | None:
-    date_value = (
-        item.get("itemCreationDate")
-        or item.get("itemOriginDate")
-    )
-
-    creation_time = parse_ebay_datetime(date_value)
-
-    if creation_time is None:
+def listing_age_minutes(item: dict[str, Any]) -> float | None:
+    created = parse_ebay_time(item.get("itemCreationDate") or item.get("itemOriginDate"))
+    if not created:
         return None
-
-    return (
-        datetime.now(timezone.utc) - creation_time
-    ).total_seconds() / 60
+    return (datetime.now(timezone.utc) - created).total_seconds() / 60
 
 
-def format_time_left(hours_left: float | None) -> str:
-    if hours_left is None:
-        return "종료시간 확인 필요"
-
-    if hours_left <= 0:
-        return "종료됨"
-
-    total_minutes = int(hours_left * 60)
-    hours, minutes = divmod(total_minutes, 60)
-
-    return f"{hours}시간 {minutes}분"
-
-
-def format_listing_age(
-    age_minutes: float | None,
-) -> str:
-    if age_minutes is None:
-        return "등록시간 확인 필요"
-
-    if age_minutes < 1:
-        return "방금 전"
-
-    if age_minutes < 60:
-        return f"{int(age_minutes)}분 전"
-
-    return f"{int(age_minutes // 60)}시간 전"
-
-
-# =========================================================
-# 제외 키워드 및 위험 키워드
-# =========================================================
-
-def find_matching_keyword(
-    text: str,
-    keywords: list[str],
-) -> str | None:
-    lower_text = text.lower()
-
-    for keyword in keywords:
-        if keyword.lower() in lower_text:
-            return keyword
-
-    return None
-
-
-def find_warning_keywords(
-    text: str,
-    keywords: list[str],
-) -> list[str]:
-    lower_text = text.lower()
-
-    return [
-        keyword
-        for keyword in keywords
-        if keyword.lower() in lower_text
-    ]
-
-
-def has_explicit_small_size(title: str) -> bool:
-    normalized = title.lower()
-
-    patterns = [
-        r"\bsize\s*xs\b",
-        r"\bextra[\s-]?small\b",
-        r"\bsize\s*small\b",
-        r"\bsize\s*s\b",
-        r"\bmens?\s+small\b",
-        r"\bwomens?\s+small\b",
-        r"\bladies\s+small\b",
-        r"\bgirls?\b",
-    ]
-
-    return any(
-        re.search(pattern, normalized)
-        for pattern in patterns
-    )
-
-
-def build_item_text(
-    item: dict[str, Any],
-    detailed_item: dict[str, Any] | None = None,
-) -> str:
-    parts = [
-        str(item.get("title", "")),
-        str(item.get("shortDescription", "")),
-        str(item.get("condition", "")),
-        str(item.get("conditionDescription", "")),
-        str(item.get("brand", "")),
-    ]
-
-    source = detailed_item or item
-
-    parts.extend([
-        str(source.get("title", "")),
-        str(source.get("shortDescription", "")),
-        str(source.get("condition", "")),
-        str(source.get("conditionDescription", "")),
-        str(source.get("brand", "")),
-    ])
-
-    aspects = source.get("localizedAspects", [])
-
-    if isinstance(aspects, list):
-        for aspect in aspects:
-            if not isinstance(aspect, dict):
-                continue
-            parts.append(str(aspect.get("name", "")))
-            parts.append(str(aspect.get("value", "")))
-
-    return " ".join(parts).lower()
-
-
-def has_multi_size_pattern(text_value: str) -> bool:
-    return any(
-        re.search(pattern, text_value.lower())
-        for pattern in MULTI_SIZE_PATTERNS
-    )
-
-
-def is_variation_listing(
-    item: dict[str, Any],
-    detailed_item: dict[str, Any] | None = None,
-) -> bool:
-    """사이즈/색상 선택형 variation 상품을 감지한다."""
-    for source in (item, detailed_item or {}):
-        if source.get("itemGroupHref"):
-            return True
-
-        if "VARIATION" in str(source.get("itemGroupType", "")).upper():
-            return True
-
-        aspects = source.get("localizedAspects", [])
-        if not isinstance(aspects, list):
+def balanced_top(candidates: list[dict[str, Any]], limit: int, per_artist: int = 2) -> list[dict[str, Any]]:
+    candidates = sorted(candidates, key=lambda x: -int(x.get("_pre_score", 0)))
+    selected: list[dict[str, Any]] = []
+    counts: dict[str, int] = {}
+    for item in candidates:
+        artist = item["_meta"]["artist"]
+        if counts.get(artist, 0) >= per_artist:
             continue
-
-        for aspect in aspects:
-            if not isinstance(aspect, dict):
-                continue
-
-            name = str(aspect.get("name", "")).lower()
-            value = str(aspect.get("value", "")).lower()
-
-            if name in {"size", "size type", "shirt size"}:
-                if has_multi_size_pattern(value):
-                    return True
-
-                size_tokens = re.findall(
-                    r"\b(?:xs|s|m|l|xl|2xl|3xl|4xl|5xl|xxl|xxxl)\b",
-                    value,
-                )
-                if len(set(size_tokens)) >= 3:
-                    return True
-
-    return False
-
-
-def extract_all_years(text_value: str) -> list[int]:
-    return [
-        int(value)
-        for value in re.findall(r"\b(?:19\d{2}|20\d{2})\b", text_value)
-    ]
-
-
-def has_nineties_signal(text_value: str) -> bool:
-    normalized = text_value.lower()
-    years = extract_all_years(normalized)
-
-    if any(NINETIES_YEAR_MIN <= year <= NINETIES_YEAR_MAX for year in years):
-        return True
-
-    return any(
-        re.search(pattern, normalized)
-        for pattern in NINETIES_TEXT_PATTERNS
-    )
-
-
-def has_modern_year_signal(text_value: str) -> bool:
-    normalized = text_value.lower()
-    years = extract_all_years(normalized)
-
-    if any(year >= 2000 for year in years):
-        return True
-
-    return any(
-        re.search(pattern, normalized)
-        for pattern in MODERN_YEAR_PATTERNS
-    )
-
-
-def has_tag_evidence(text_value: str) -> bool:
-    normalized = text_value.lower()
-
-    positive_tag_terms = [
-        "giant",
-        "brockum",
-        "winterland",
-        "em winterland",
-        "fashion victim",
-        "screen stars",
-        "screen stars best",
-        "tee jays",
-        "all sport",
-        "oneita",
-        "wild oats",
-        "murina",
-        "changes",
-        "anvil",
-        "hanes",
-        "fruit of the loom",
-        "tultex",
-        "stedman",
-        "bay club",
-        "signal",
-        "delta",
-        "made in usa",
-        "made in u.s.a",
-        "single stitch",
-        "single-stitch",
-    ]
-
-    return any(term in normalized for term in positive_tag_terms)
-
-
-def evaluate_vintage_authenticity(
-    item: dict[str, Any],
-    detailed_item: dict[str, Any] | None = None,
-) -> tuple[bool, str, int]:
-    combined_text = build_item_text(
-        item,
-        detailed_item,
-    )
-
-    if has_modern_year_signal(combined_text):
-        return False, "2000년대 이후 연대 신호", 0
-
-    if not has_nineties_signal(combined_text):
-        return False, "90년대 근거 없음", 0
-
-    for keyword in REPRINT_HARD_KEYWORDS:
-        if keyword in combined_text:
-            return False, f"리프린트 신호: {keyword}", 0
-
-    if is_variation_listing(item, detailed_item):
-        return False, "사이즈/색상 선택형 variation 상품", 0
-
-    if has_multi_size_pattern(combined_text):
-        return False, "다중 사이즈 주문형 상품", 0
-
-    modern_hits = [
-        keyword
-        for keyword in MODERN_BODY_KEYWORDS
-        if keyword in combined_text
-    ]
-
-    vintage_hits = [
-        keyword
-        for keyword in VINTAGE_POSITIVE_KEYWORDS
-        if keyword in combined_text
-    ]
-
-    if not has_tag_evidence(combined_text):
-        return False, "빈티지 택/바디 근거 없음", 0
-
-    price_value, _ = parse_amount(item.get("price"))
-    condition_text = " ".join([
-        str(item.get("condition", "")),
-        str((detailed_item or {}).get("condition", "")),
-    ]).lower()
-
-    if (
-        price_value is not None
-        and 15.0 <= price_value <= 35.0
-        and "new" in condition_text
-        and not vintage_hits
-    ):
-        return False, "저가 신품 리프린트 패턴", 0
-
-    if modern_hits and not vintage_hits:
-        return (
-            False,
-            f"현대 바디 신호: {modern_hits[0]}",
-            0,
-        )
-
-    score = min(len(vintage_hits) * 15, 60)
-
-    year = extract_listing_year(
-        str(item.get("title", ""))
-    )
-
-    if year is not None:
-        if 1980 <= year <= 1999:
-            score += 20
-        elif 2000 <= year <= 2005:
-            score += 5
-        elif year >= 2006:
-            score -= 25
-
-    if modern_hits:
-        score -= min(len(modern_hits) * 20, 40)
-
-    return True, "통과", max(score, 0)
-
-
-# =========================================================
-# 태그 감지 — 현재는 내부 참고용
-# =========================================================
-
-def detect_tag(
-    title: str,
-    tag_config: dict[str, Any],
-) -> tuple[str | None, int]:
-    lower_title = title.lower()
-
-    scores = tag_config.get("tag_scores", {})
-    aliases = tag_config.get("tag_aliases", {})
-
-    for alias, canonical_name in aliases.items():
-        if alias.lower() in lower_title:
-            return (
-                canonical_name,
-                int(scores.get(canonical_name, 0)),
-            )
-
-    ordered_tags = sorted(
-        scores.items(),
-        key=lambda entry: len(entry[0]),
-        reverse=True,
-    )
-
-    for tag_name, score in ordered_tags:
-        if tag_name.lower() in lower_title:
-            return tag_name, int(score)
-
-    return None, 0
-
-
-
-# =========================================================
-# 검색 정확도 및 내부 우선순위
-# =========================================================
-
-ARTIST_ALIASES: dict[str, list[str]] = {
-    "ACDC": ["AC/DC", "AC DC"],
-    "Guns N Roses": ["Guns N' Roses", "Guns N Roses", "GNR"],
-    "Mötley Crüe": ["Motley Crue", "Mötley Crüe"],
-    "Motorhead": ["Motörhead", "Motorhead"],
-    "Notorious BIG": ["The Notorious B.I.G.", "Notorious BIG", "Biggie Smalls"],
-    "NWA": ["N.W.A.", "NWA"],
-    "Run DMC": ["Run-D.M.C.", "Run DMC"],
-    "Wu-Tang Clan": ["Wu-Tang Clan", "Wu Tang Clan", "Wu-Tang"],
-    "Tupac": ["Tupac", "2Pac", "Makaveli"],
-    "Red Hot Chili Peppers": ["Red Hot Chili Peppers", "RHCP"],
-    "Rage Against the Machine": ["Rage Against the Machine", "RATM"],
-    "Nine Inch Nails": ["Nine Inch Nails", "NIN"],
-    "Stone Temple Pilots": ["Stone Temple Pilots", "STP"],
-    "Alice in Chains": ["Alice in Chains", "AIC"],
-}
-
-
-def normalize_search_text(value: str) -> str:
-    normalized = value.lower().replace("&", " and ")
-    normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
-    return " ".join(normalized.split())
-
-
-def title_matches_artist(
-    title: str,
-    artist: str,
-    match_terms: list[str] | None = None,
-) -> bool:
-    normalized_title = normalize_search_text(title)
-
-    candidates = list(
-        ARTIST_ALIASES.get(artist, [artist])
-    )
-
-    if match_terms:
-        candidates.extend(match_terms)
-
-    for candidate in dict.fromkeys(candidates):
-        normalized_candidate = normalize_search_text(
-            candidate
-        )
-
-        if (
-            normalized_candidate
-            and normalized_candidate in normalized_title
-        ):
-            return True
-
-    return False
-
-
-def extract_listing_year(title: str) -> int | None:
-    matches = re.findall(r"\b(?:19\d{2}|20\d{2})\b", title)
-    if not matches:
-        return None
-
-    years = [int(value) for value in matches]
-    plausible = [year for year in years if 1970 <= year <= 2030]
-    return min(plausible) if plausible else None
-
-
-def calculate_quality_score(item: dict[str, Any]) -> int:
-    title = item.get("title", "").lower()
-    tier = item.get("_tier", "tier_3")
-    score = {"tier_1": 30, "tier_2": 20, "tier_3": 10}.get(tier, 0)
-
-    year = extract_listing_year(title)
-    if year is not None:
-        if 1980 <= year <= 1999:
-            score += 20
-        elif year >= 2000:
-            score -= 30
-
-    score += min(int(item.get("_tag_score", 0)) // 2, 20)
-    score += min(int(item.get("_authenticity_score", 0)) // 2, 30)
-
-    if "vintage" in title or "old" in title:
-        score += 8
-    if "single stitch" in title or "single-stitch" in title:
-        score += 10
-    if "made in usa" in title or "made in u.s.a" in title:
-        score += 5
-    if "tour" in title or "concert" in title:
-        score += 5
-
-    warnings = item.get("_warnings", [])
-    score -= min(len(warnings) * 8, 24)
-
-    total_before_forwarding = float(item.get("_price", 0)) + float(
-        item.get("_shipping", 0)
-    )
-    if total_before_forwarding <= 100:
-        score += 10
-    elif total_before_forwarding <= 175:
-        score += 5
-
-    if item.get("_listing_type") == "FIXED_PRICE":
-        age = item.get("_age_minutes")
-        if age is not None and age <= 10:
-            score += 5
-    else:
-        hours = item.get("_hours_left")
-        if hours is not None and hours <= 6:
-            score += 5
-
-    return max(score, 0)
-
-# =========================================================
-# 상품 평가
-# =========================================================
-
-def evaluate_auction(
-    token: str,
-    item: dict[str, Any],
-    artist: str,
-    tier: str,
-    hard_excludes: list[str],
-    warning_keywords: list[str],
-    tag_config: dict[str, Any],
-    match_terms: list[str] | None = None,
-) -> tuple[bool, str, dict[str, Any]]:
-    title = item.get("title", "")
-
-    if not title_matches_artist(
-        title,
-        artist,
-        match_terms,
-    ):
-        return False, "검색 아티스트와 제목 불일치", item
-
-    excluded = find_matching_keyword(
-        title,
-        hard_excludes,
-    )
-
-    if excluded:
-        return False, f"제외 키워드: {excluded}", item
-
-    if has_explicit_small_size(title):
-        return False, "작은 사이즈 명확", item
-
-    hours_left = get_hours_left(
-        item.get("itemEndDate")
-    )
-
-    if hours_left is None:
-        return False, "종료시간 확인 불가", item
-
-    if hours_left <= 0:
-        return False, "종료됨", item
-
-    if hours_left > AUCTION_MAX_HOURS_LEFT:
-        return False, "종료까지 24시간 초과", item
-
-    (
-        price,
-        currency,
-        price_label,
-        detailed_item,
-    ) = resolve_auction_price(token, item)
-
-    if price is None or price <= 0:
-        return False, "현재 가격 확인 불가", item
-
-    shipping, detailed_item = resolve_shipping_cost(
-        token,
-        item,
-        detailed_item,
-    )
-
-    if shipping is None:
-        return False, "미국 배송비 확인 불가", item
-
-    if price + shipping > MAX_ITEM_AND_US_SHIPPING_USD:
-        return False, "예산 $250 초과", item
-
-    authenticity_passed, authenticity_reason, authenticity_score = (
-        evaluate_vintage_authenticity(
-            item,
-            detailed_item,
-        )
-    )
-
-    if not authenticity_passed:
-        return False, authenticity_reason, item
-
-    tag_name, tag_score = detect_tag(
-        title,
-        tag_config,
-    )
-
-    processed = dict(item)
-
-    processed.update({
-        "_artist": artist,
-        "_tier": tier,
-        "_listing_type": "AUCTION",
-        "_price": price,
-        "_currency": currency,
-        "_price_label": price_label,
-        "_shipping": shipping,
-        "_hours_left": hours_left,
-        "_age_minutes": None,
-        "_warnings": find_warning_keywords(
-            title,
-            warning_keywords,
-        ),
-        "_tag_name": tag_name,
-        "_tag_score": tag_score,
-        "_authenticity_score": authenticity_score,
-    })
-    processed["_quality_score"] = calculate_quality_score(processed)
-
-    return True, "통과", processed
-
-
-def evaluate_fixed_price(
-    token: str,
-    item: dict[str, Any],
-    artist: str,
-    tier: str,
-    hard_excludes: list[str],
-    warning_keywords: list[str],
-    tag_config: dict[str, Any],
-    match_terms: list[str] | None = None,
-) -> tuple[bool, str, dict[str, Any]]:
-    title = item.get("title", "")
-
-    if not title_matches_artist(
-        title,
-        artist,
-        match_terms,
-    ):
-        return False, "검색 아티스트와 제목 불일치", item
-
-    excluded = find_matching_keyword(
-        title,
-        hard_excludes,
-    )
-
-    if excluded:
-        return False, f"제외 키워드: {excluded}", item
-
-    if has_explicit_small_size(title):
-        return False, "작은 사이즈 명확", item
-
-    price, currency = get_fixed_price(item)
-
-    if price is None or price <= 0:
-        return False, "즉시구매가 확인 불가", item
-
-    shipping, detailed_item = resolve_shipping_cost(
-        token,
-        item,
-    )
-
-    if shipping is None:
-        return False, "미국 배송비 확인 불가", item
-
-    if price + shipping > MAX_ITEM_AND_US_SHIPPING_USD:
-        return False, "예산 $250 초과", item
-
-    # 즉시구매도 상세정보를 조회해 variation / size / body 신호를 검사한다.
-    item_id = item.get("itemId")
-    if item_id and detailed_item is item:
-        try:
-            detailed_item = get_item_details(token, item_id)
-        except requests.RequestException as error:
-            print("즉시구매 상세조회 실패:", title)
-            print(error)
-            detailed_item = item
-
-    authenticity_passed, authenticity_reason, authenticity_score = (
-        evaluate_vintage_authenticity(item, detailed_item)
-    )
-
-    if not authenticity_passed:
-        return False, authenticity_reason, item
-
-    age_minutes = get_listing_age_minutes(item)
-
-    tag_name, tag_score = detect_tag(
-        title,
-        tag_config,
-    )
-
-    buying_options = item.get("buyingOptions", [])
-
-    processed = dict(item)
-
-    processed.update({
-        "_artist": artist,
-        "_tier": tier,
-        "_listing_type": "FIXED_PRICE",
-        "_price": price,
-        "_currency": currency,
-        "_price_label": "즉시구매가",
-        "_shipping": shipping,
-        "_hours_left": None,
-        "_age_minutes": age_minutes,
-        "_warnings": find_warning_keywords(
-            title,
-            warning_keywords,
-        ),
-        "_tag_name": tag_name,
-        "_tag_score": tag_score,
-        "_authenticity_score": authenticity_score,
-        "_best_offer": (
-            "BEST_OFFER" in buying_options
-        ),
-    })
-    processed["_quality_score"] = calculate_quality_score(processed)
-
-    return True, "통과", processed
-
-
-# =========================================================
-# 모든 검색 실행
-# =========================================================
-
-def search_all(
-    token: str,
-    query_entries: list[dict[str, Any]],
-) -> tuple[
-    list[dict[str, Any]],
-    list[dict[str, Any]],
-]:
-    auction_items: dict[str, dict[str, Any]] = {}
-    fixed_items: dict[str, dict[str, Any]] = {}
-
-    for index, entry in enumerate(
-        query_entries,
-        start=1,
-    ):
-        artist = entry["artist"]
-        tier = entry["tier"]
-        query = entry["query"]
-
-        print(
-            f"[{index}/{len(query_entries)}] "
-            f"{tier} / {artist} / {query}"
-        )
-
-        if RADAR_MODE in {"ALL", "AUCTION"}:
-            try:
-                results = search_one_query(
-                    token,
-                    query,
-                    "AUCTION",
-                )
-
-                for item in results:
-                    item_id = item.get("itemId")
-
-                    if item_id:
-                        item["_search_artist"] = artist
-                        item["_search_tier"] = tier
-                        item["_search_match_terms"] = entry.get(
-                            "match_terms",
-                            [artist],
-                        )
-                        auction_items[item_id] = item
-
-            except requests.RequestException as error:
-                print(f"경매 검색 실패: {query}")
-                print(error)
-
-        if RADAR_MODE in {"ALL", "FIXED_PRICE"}:
-            try:
-                results = search_one_query(
-                    token,
-                    query,
-                    "FIXED_PRICE",
-                )
-
-                for item in results:
-                    item_id = item.get("itemId")
-
-                    if item_id:
-                        item["_search_artist"] = artist
-                        item["_search_tier"] = tier
-                        item["_search_match_terms"] = entry.get(
-                            "match_terms",
-                            [artist],
-                        )
-                        fixed_items[item_id] = item
-
-            except requests.RequestException as error:
-                print(f"즉시구매 검색 실패: {query}")
-                print(error)
-
-    return (
-        list(auction_items.values()),
-        list(fixed_items.values()),
-    )
-
-
-# =========================================================
-# 알림 정렬 및 분산
-# =========================================================
-
-def tier_weight(tier: str) -> int:
-    weights = {
-        "tier_1": 3,
-        "tier_2": 2,
-        "tier_3": 1,
-    }
-
-    return weights.get(tier, 0)
-
-
-def prepare_alert_items(
-    fixed_items: list[dict[str, Any]],
-    auction_items: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """
-    가격 비교 전에 후보를 버리지 않는다.
-    통과한 후보 전체를 호가 비교 단계로 넘긴다.
-    """
-    fixed_items.sort(
-        key=lambda item: (
-            -int(item.get("_quality_score", 0)),
-            item.get("_age_minutes")
-            if item.get("_age_minutes") is not None
-            else float("inf"),
-        )
-    )
-
-    auction_items.sort(
-        key=lambda item: (
-            -int(item.get("_quality_score", 0)),
-            item.get("_hours_left")
-            if item.get("_hours_left") is not None
-            else float("inf"),
-        )
-    )
-
-    return fixed_items + auction_items
-
-
-
-
-# =========================================================
-# 현재 eBay 호가 참고값
-# =========================================================
-
-REFERENCE_STOP_WORDS = {
-    "vintage", "shirt", "tee", "tshirt", "t-shirt", "band", "tour",
-    "concert", "single", "stitch", "mens", "men", "size", "large",
-    "xl", "xxl", "rare", "official", "original", "black", "graphic",
-    "usa", "made", "the", "and", "for", "with", "from", "1990s", "90s",
-}
-
-
-def build_reference_query(item: dict[str, Any]) -> str:
-    """
-    아티스트명만 쓰지 않고 상품 제목의 고유 단어를 일부 포함해
-    더 비슷한 현재 판매 매물과 비교한다.
-    """
-    artist = str(item.get("_artist", "")).strip()
-    title = str(item.get("title", ""))
-
-    normalized_title = normalize_search_text(title)
-    normalized_artist = normalize_search_text(artist)
-
-    artist_tokens = set(normalized_artist.split())
-    candidate_tokens: list[str] = []
-
-    for token in normalized_title.split():
-        if token in artist_tokens:
-            continue
-        if token in REFERENCE_STOP_WORDS:
-            continue
-        if len(token) < 3:
-            continue
-        if re.fullmatch(r"19\d{2}|20\d{2}", token):
-            continue
-        if token not in candidate_tokens:
-            candidate_tokens.append(token)
-
-    distinctive_tokens = candidate_tokens[:3]
-
-    if distinctive_tokens:
-        return " ".join([artist, *distinctive_tokens, "shirt"])
-
+        selected.append(item)
+        counts[artist] = counts.get(artist, 0) + 1
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def reference_query(item: dict[str, Any]) -> str:
+    artist = item["_artist"]
+    subject = str(item.get("_subject", "")).strip()
+    if subject and normalize(subject) != normalize(artist):
+        return f"{artist} {subject} vintage shirt"
     return f"{artist} vintage shirt"
 
 
-def add_market_references(
-    token: str,
-    items: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """알림 후보에 한해서 현재 즉시구매 호가 중앙값을 붙인다."""
-    reference_cache: dict[str, dict[str, Any] | None] = {}
-
-    for item in items:
-        artist = str(item.get("_artist", "")).strip()
-
-        if not artist:
-            item["_market_reference"] = None
-            continue
-
-        query = build_reference_query(item)
-
-        if query not in reference_cache:
-            try:
-                reference_cache[query] = get_active_price_reference(
-                    token=token,
-                    query=query,
-                    maximum_results=50,
-                )
-            except requests.RequestException as error:
-                print(f"호가 참고값 조회 실패: {query}")
-                print(error)
-                reference_cache[query] = None
-
-        reference = reference_cache[query]
-        item["_market_reference"] = reference
-
-        if reference is None:
-            item["_asking_discount_percent"] = None
-            continue
-
-        total_cost = (
-            float(item.get("_price", 0))
-            + float(item.get("_shipping", 0))
-            + FORWARDING_FEE_USD
-        )
-
-        discount_percent = calculate_listing_discount(
-            total_cost=total_cost,
-            reference_median=float(reference["median"]),
-        )
-
-        expected_profit_usd = calculate_expected_profit(
-            reference_median=float(reference["median"]),
-            total_purchase_cost=total_cost,
-        )
-
-        deal_result = classify_deal(
-            discount_percent=discount_percent,
-            expected_profit_usd=expected_profit_usd,
-            sample_count=int(reference["sample_count"]),
-        )
-
-        item["_asking_discount_percent"] = discount_percent
-        item["_expected_profit_usd"] = expected_profit_usd
-        item["_deal_rating"] = deal_result["rating"]
-        item["_deal_label"] = deal_result["label"]
-        item["_should_alert"] = bool(deal_result["should_alert"])
-
-    return items
+def load_seen() -> set[str]:
+    data = load_json(SEEN_ITEMS_PATH, {"item_ids": []})
+    return set(data.get("item_ids", []))
 
 
-def filter_undervalued_items(
-    items: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """30% 이상 저렴하고 비교 표본이 충분한 매물만 남긴다."""
-    filtered: list[dict[str, Any]] = []
-
-    for item in items:
-        discount = item.get("_asking_discount_percent")
-
-        if discount is None:
-            print(
-                "호가 비교 제외 / 참고값 없음 / "
-                f"{item.get('title', '제목 없음')}"
-            )
-            continue
-
-        if not item.get("_should_alert", False):
-            print(
-                "딜 평가 탈락 / "
-                f"{float(discount):.1f}% / "
-                f"{item.get('_deal_label', '기준 미달')} / "
-                f"{item.get('title', '제목 없음')}"
-            )
-            continue
-
-        filtered.append(item)
-
-    filtered.sort(
-        key=lambda item: (
-            -float(item.get("_asking_discount_percent", 0)),
-            -float(item.get("_expected_profit_usd", 0)),
-            -int(item.get("_quality_score", 0)),
-        )
-    )
-
-    return filtered
+def save_seen(ids: set[str]) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with SEEN_ITEMS_PATH.open("w", encoding="utf-8") as fh:
+        json.dump({"item_ids": sorted(ids)[-5000:]}, fh, ensure_ascii=False, indent=2)
 
 
-# =========================================================
-# 텔레그램 메시지
-# =========================================================
+def format_age(minutes: float | None) -> str:
+    if minutes is None:
+        return "확인 필요"
+    if minutes < 60:
+        return f"{max(0, int(minutes))}분 전"
+    return f"{int(minutes // 60)}시간 전"
 
-def build_message(
-    item: dict[str, Any],
-    exchange_rate: float,
-) -> str:
-    title = item.get("title", "제목 없음")
+
+def format_hours(hours: float | None) -> str:
+    if hours is None:
+        return "확인 필요"
+    total = max(0, int(hours * 60))
+    return f"{total // 60}시간 {total % 60}분"
+
+
+def build_message(item: dict[str, Any], exchange_rate: float) -> str:
+    reference = item["_reference"]
+    total = item["_total_cost"]
+    price = item["_price"]
+    shipping = item["_shipping"]
+    result = item["_deal"]
     listing_type = item["_listing_type"]
-
-    price = float(item["_price"])
-    shipping = float(item["_shipping"])
-
-    total_usd = (
-        price
-        + shipping
-        + FORWARDING_FEE_USD
+    watch = item.get("_watch_count")
+    time_line = (
+        f"⏰ 남은 시간: {format_hours(item.get('_hours_left'))}"
+        if listing_type == "AUCTION"
+        else f"🕒 등록: {format_age(item.get('_age_minutes'))}"
     )
-
-    price_krw = round(price * exchange_rate)
-    shipping_krw = round(shipping * exchange_rate)
-    total_krw = round(total_usd * exchange_rate)
-
-    ebay_url = item.get(
-        "itemWebUrl",
-        "링크 없음",
-    )
-
-    if listing_type == "AUCTION":
-        type_line = "🔨 경매"
-        time_line = (
-            "⏰ 남은 시간: "
-            f"{format_time_left(item.get('_hours_left'))}"
-        )
-    else:
-        type_line = "⚡ 즉시구매"
-
-        if item.get("_best_offer"):
-            type_line += " · 가격 제안 가능"
-
-        time_line = (
-            "🕒 등록 시간: "
-            f"{format_listing_age(item.get('_age_minutes'))}"
-        )
-
-    warnings = item.get("_warnings", [])
-
+    auth_line = ", ".join(item.get("_auth_reasons", [])) or "확인 근거 있음"
+    watch_line = f"\n❤️ Watch: {watch}" if watch is not None else ""
     warning_line = ""
+    if item.get("_warnings"):
+        warning_line = "\n⚠️ " + ", ".join(item["_warnings"])
 
-    if warnings:
-        warning_line = (
-            "\n⚠️ 주의: "
-            + ", ".join(warnings)
-        )
+    return (
+        f"🔥 {result['label']} {result['rating']}\n\n"
+        f"👕 {item.get('title', '제목 없음')}\n"
+        f"🎸 {item['_artist']} · 90s verified\n\n"
+        f"💰 {item['_price_label']}: ${price:.2f} / 약 {round(price * exchange_rate):,}원\n"
+        f"🚚 미국 배송비: ${shipping:.2f}\n"
+        f"📦 총 매입예상: ${total:.2f} / 약 {round(total * exchange_rate):,}원\n\n"
+        f"📊 활성 호가 중앙값: ${reference['median']:.2f}\n"
+        f"🛡️ 보수 시세(P40): ${reference['conservative']:.2f} · {reference['sample_count']}건\n"
+        f"📉 보수 시세 대비: {result['discount_percent']:.1f}% 저렴\n"
+        f"💵 시세-매입 스프레드: ${result['spread_usd']:.2f}\n"
+        f"🎯 Hunter Score: {result['hunter_score']:.1f} · 신뢰 {result['confidence']}\n"
+        f"🏷️ 근거: {auth_line}{watch_line}\n"
+        f"{time_line}{warning_line}\n\n"
+        f"🔗 {item.get('itemWebUrl', '')}\n\n"
+        f"※ 시세는 eBay 활성 호가 기준이며 실거래 완료가가 아닙니다."
+    )
 
-    reference = item.get("_market_reference")
-    discount_percent = item.get("_asking_discount_percent")
-    expected_profit_usd = item.get("_expected_profit_usd")
-    deal_rating = item.get("_deal_rating", "")
-    deal_label = item.get("_deal_label", "")
-    reference_lines = ""
-
-    if reference is not None:
-        median_usd = float(reference["median"])
-        median_krw = round(median_usd * exchange_rate)
-        sample_count = int(reference["sample_count"])
-
-        reference_lines = (
-            f"\n📊 현재 호가 중앙값: ${median_usd:.2f} "
-            f"/ 약 {median_krw:,}원 ({sample_count}건)"
-        )
-
-        if discount_percent is not None:
-            reference_lines += (
-                f"\n💸 현재 호가 대비: {float(discount_percent):.1f}% 저렴"
-            )
-
-        if expected_profit_usd is not None:
-            expected_profit_krw = round(
-                float(expected_profit_usd) * exchange_rate
-            )
-            reference_lines += (
-                f"\n📈 예상 차익: ${float(expected_profit_usd):.2f} "
-                f"/ 약 {expected_profit_krw:,}원"
-            )
-
-        if deal_rating:
-            reference_lines += (
-                f"\n⭐ 추천도: {deal_rating} · {deal_label}"
-            )
-
-    return f"""
-🎯 빈티지 레이더
-
-{type_line}
-👕 {title}
-
-💰 {item["_price_label"]}: ${price:.2f} / 약 {price_krw:,}원
-🚚 미국 배송비: ${shipping:.2f} / 약 {shipping_krw:,}원
-💵 총 예상금액: ${total_usd:.2f} / 약 {total_krw:,}원
-📦 배대지 $10 포함
-{time_line}{reference_lines}{warning_line}
-
-🔗 eBay 바로가기
-{ebay_url}
-""".strip()
-
-
-def send_alerts(
-    items: list[dict[str, Any]],
-    seen_item_ids: set[str],
-) -> set[str]:
-    new_items = [
-        item
-        for item in items
-        if item.get("itemId") not in seen_item_ids
-    ]
-
-    if not new_items:
-        print("새로운 조건 충족 상품 없음 — 텔레그램 전송 생략")
-        return seen_item_ids
-
-    exchange_result = usd_to_krw(1)
-    exchange_rate = float(exchange_result["rate"])
-
-    for item in new_items:
-        item_id = item.get("itemId")
-
-        if not item_id:
-            continue
-
-        send_telegram_message(
-            build_message(
-                item,
-                exchange_rate,
-            )
-        )
-
-        seen_item_ids.add(item_id)
-
-    return seen_item_ids
-
-
-# =========================================================
-# 메인
-# =========================================================
 
 def main() -> None:
-    (
-        artist_database,
-        search_patterns,
-        excluded_keywords,
-        tag_config,
-    ) = load_configs()
+    profile, artist_db, patterns, excludes, tags = load_configs()
+    if not profile:
+        raise RuntimeError("config/hunter_profile.json이 필요합니다.")
 
-    selected_artists = select_artists(
-        artist_database
-    )
-
-    query_entries = build_queries(
-        selected_artists,
-        search_patterns,
-    )
-
-    hard_excludes = excluded_keywords.get(
-        "hard_exclude",
-        [],
-    )
-
-    warning_keywords = excluded_keywords.get(
-        "soft_warning",
-        [],
-    )
-
-    print(f"실행 모드: {RADAR_MODE}")
-    print("이번 실행 검색 대상")
-    print("=" * 70)
-
-    for entry in query_entries:
-        print(
-            f"- {entry['tier']} / "
-            f"{entry['artist']} / "
-            f"{entry['query']}"
-        )
-
-    print("=" * 70)
-
+    search_cfg = profile["search"]
+    budget_cfg = profile["budget"]
+    selected = choose_artists(profile, artist_db)
+    queries = build_queries(profile, selected, patterns)
     token = get_access_token()
 
-    auctions, fixed_items = search_all(
-        token,
-        query_entries,
+    print(f"Hunter V6 / mode={RADAR_MODE} / queries={len(queries)}")
+    for q in queries:
+        print(f"- {q['tier']} / {q['artist']} / {q['query']}")
+
+    listing_types = [RADAR_MODE] if RADAR_MODE != "ALL" else ["FIXED_PRICE", "AUCTION"]
+    summaries: dict[str, dict[str, Any]] = {}
+
+    for listing_type in listing_types:
+        for meta in queries:
+            try:
+                results = search_one_query(
+                    token,
+                    meta["query"],
+                    listing_type,
+                    float(budget_cfg["max_item_plus_us_shipping_usd"]),
+                    int(search_cfg["limit_per_query"]),
+                )
+            except requests.RequestException as exc:
+                print(f"검색 실패 / {meta['query']} / {exc}")
+                continue
+
+            for item in results:
+                item_id = item.get("itemId")
+                if not item_id:
+                    continue
+                passed, _ = prefilter_summary(item, meta, excludes)
+                if not passed:
+                    continue
+                score = summary_priority(item, meta, tags)
+                existing = summaries.get(item_id)
+                if existing is None or score > int(existing.get("_pre_score", 0)):
+                    copy = dict(item)
+                    copy["_meta"] = meta
+                    copy["_listing_type"] = listing_type
+                    copy["_pre_score"] = score
+                    summaries[item_id] = copy
+
+    detail_budget = int(
+        search_cfg["fixed_detail_budget"] if RADAR_MODE == "FIXED_PRICE"
+        else search_cfg["auction_detail_budget"]
     )
+    detail_targets = balanced_top(list(summaries.values()), detail_budget)
+    verified: list[dict[str, Any]] = []
 
-    qualified_auctions: list[dict[str, Any]] = []
-    qualified_fixed: list[dict[str, Any]] = []
-
-    for item in auctions:
-        artist = item.get(
-            "_search_artist",
-            "알 수 없음",
-        )
-
-        tier = item.get(
-            "_search_tier",
-            "tier_3",
-        )
-
-        passed, reason, processed = evaluate_auction(
-            token,
-            item,
-            artist,
-            tier,
-            hard_excludes,
-            warning_keywords,
-            tag_config,
-            item.get("_search_match_terms"),
-        )
-
-        if passed:
-            qualified_auctions.append(processed)
-        else:
-            print(
-                f"경매 탈락 / {artist} / "
-                f"{reason} / "
-                f"{item.get('title', '제목 없음')}"
-            )
-
-    for item in fixed_items:
-        artist = item.get(
-            "_search_artist",
-            "알 수 없음",
-        )
-
-        tier = item.get(
-            "_search_tier",
-            "tier_3",
-        )
-
-        passed, reason, processed = evaluate_fixed_price(
-            token,
-            item,
-            artist,
-            tier,
-            hard_excludes,
-            warning_keywords,
-            tag_config,
-            item.get("_search_match_terms"),
-        )
-
-        if passed:
-            qualified_fixed.append(processed)
-        else:
-            print(
-                f"즉시구매 탈락 / {artist} / "
-                f"{reason} / "
-                f"{item.get('title', '제목 없음')}"
-            )
-
-    alert_items = prepare_alert_items(
-        qualified_fixed,
-        qualified_auctions,
-    )
-
-    alert_items = add_market_references(
-        token,
-        alert_items,
-    )
-
-    alert_items = filter_undervalued_items(
-        alert_items,
-    )
-
-    final_alert_items: list[dict[str, Any]] = []
-    artist_counts: dict[str, int] = {}
-
-    for item in alert_items:
-        artist = item.get("_artist", "알 수 없음")
-
-        if artist_counts.get(artist, 0) >= MAX_ALERTS_PER_ARTIST:
+    for summary in detail_targets:
+        item_id = summary["itemId"]
+        try:
+            detail = get_item_details(token, item_id)
+        except requests.RequestException as exc:
+            print(f"상세조회 실패 / {summary.get('title')} / {exc}")
             continue
 
-        final_alert_items.append(item)
-        artist_counts[artist] = artist_counts.get(artist, 0) + 1
+        meta = summary["_meta"]
+        if not title_matches_artist(str(detail.get("title", summary.get("title", ""))), meta["artist"]):
+            continue
 
-        if len(final_alert_items) >= MAX_ALERTS_PER_RUN:
+        passed, reason, auth_data = authenticity_check(detail, profile, excludes, tags)
+        if not passed:
+            print(f"빈티지 탈락 / {meta['artist']} / {reason} / {summary.get('title')}")
+            continue
+
+        listing_type = summary["_listing_type"]
+        price, currency, price_label = price_for_listing(detail, listing_type)
+        if price is None or price <= 0:
+            price, currency, price_label = price_for_listing(summary, listing_type)
+        shipping = get_shipping(detail)
+        if shipping is None:
+            shipping = get_shipping(summary)
+        if price is None or price <= 0 or shipping is None:
+            continue
+
+        if price + shipping > float(budget_cfg["max_item_plus_us_shipping_usd"]):
+            continue
+
+        h_left = hours_left(detail if detail.get("itemEndDate") else summary)
+        if listing_type == "AUCTION":
+            if h_left is None or h_left <= 0 or h_left > float(search_cfg["auction_max_hours_left"]):
+                continue
+
+        item = dict(detail)
+        item.update({
+            "_artist": meta["artist"],
+            "_tier": meta["tier"],
+            "_subject": meta["subject"],
+            "_listing_type": listing_type,
+            "_price": price,
+            "_currency": currency,
+            "_price_label": price_label,
+            "_shipping": shipping,
+            "_total_cost": price + shipping + float(budget_cfg["forwarding_fee_usd"]),
+            "_auth_score": int(auth_data["authenticity_score"]),
+            "_auth_reasons": auth_data["authenticity_reasons"],
+            "_warnings": auth_data["warnings"],
+            "_hours_left": h_left,
+            "_age_minutes": listing_age_minutes(summary),
+            "_watch_count": summary.get("watchCount", detail.get("watchCount")),
+            "_pre_score": summary["_pre_score"] + int(auth_data["authenticity_score"]),
+        })
+        verified.append(item)
+
+    verified.sort(key=lambda x: -int(x.get("_pre_score", 0)))
+    ref_budget = int(
+        search_cfg["fixed_reference_budget"] if RADAR_MODE == "FIXED_PRICE"
+        else search_cfg["auction_reference_budget"]
+    )
+    reference_targets = verified[:ref_budget]
+    reference_cache: dict[str, dict[str, Any] | None] = {}
+    deals: list[dict[str, Any]] = []
+
+    for item in reference_targets:
+        query = reference_query(item)
+        if query not in reference_cache:
+            try:
+                API_CALLS["reference"] += 1
+                reference_cache[query] = get_active_price_reference(token=token, query=query, maximum_results=100)
+            except requests.RequestException as exc:
+                print(f"시세조회 실패 / {query} / {exc}")
+                reference_cache[query] = None
+        reference = reference_cache[query]
+        if not reference:
+            continue
+
+        result = classify_deal(
+            total_purchase_cost=float(item["_total_cost"]),
+            reference_median=float(reference["median"]),
+            conservative_reference=float(reference["conservative"]),
+            sample_count=int(reference["sample_count"]),
+            authenticity_score=int(item["_auth_score"]),
+            tier=item["_tier"],
+            settings=profile["deal"],
+        )
+        if not result["should_alert"]:
+            print(
+                f"딜 탈락 / {item['_artist']} / {result['label']} / "
+                f"median ${reference['median']:.0f} / {result['discount_percent']:.1f}% / {item.get('title')}"
+            )
+            continue
+        item["_reference"] = reference
+        item["_deal"] = result
+        deals.append(item)
+
+    deals.sort(key=lambda x: (
+        -float(x["_deal"].get("hunter_score", 0)),
+        -float(x["_reference"]["median"]),
+        -float(x["_deal"]["discount_percent"]),
+    ))
+
+    max_alerts = int(search_cfg["max_alerts_per_run"])
+    max_per_artist = int(search_cfg["max_alerts_per_artist"])
+    seen = load_seen()
+    counts: dict[str, int] = {}
+    final: list[dict[str, Any]] = []
+    for item in deals:
+        item_id = item.get("itemId")
+        if not item_id or item_id in seen:
+            continue
+        artist = item["_artist"]
+        if counts.get(artist, 0) >= max_per_artist:
+            continue
+        final.append(item)
+        counts[artist] = counts.get(artist, 0) + 1
+        if len(final) >= max_alerts:
             break
 
-    alert_items = final_alert_items
+    if final:
+        exchange_rate = float(usd_to_krw(1)["rate"])
+        for item in final:
+            send_telegram_message(build_message(item, exchange_rate))
+            seen.add(item["itemId"])
+        save_seen(seen)
+    else:
+        print("알림 대상 없음 — 텔레그램 전송 생략")
 
-    print("=" * 70)
-    print(f"검색된 경매: {len(auctions)}개")
-    print(f"검색된 즉시구매: {len(fixed_items)}개")
     print(
-        f"통과한 경매: "
-        f"{len(qualified_auctions)}개"
+        f"summary={len(summaries)} / detail={len(detail_targets)} / verified={len(verified)} / "
+        f"deals={len(deals)} / alerts={len(final)} / calls={API_CALLS}"
     )
-    print(
-        f"통과한 즉시구매: "
-        f"{len(qualified_fixed)}개"
-    )
-    print(f"알림 후보: {len(alert_items)}개")
-    print("=" * 70)
-
-    seen_item_ids = load_seen_item_ids()
-
-    updated_ids = send_alerts(
-        alert_items,
-        seen_item_ids,
-    )
-
-    save_seen_item_ids(updated_ids)
 
 
 if __name__ == "__main__":

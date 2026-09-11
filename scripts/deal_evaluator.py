@@ -3,59 +3,133 @@ from __future__ import annotations
 from typing import Any
 
 
-MIN_DISCOUNT_PERCENT = 30.0
+def calculate_discount(total_purchase_cost: float, reference_value: float) -> float:
+    if total_purchase_cost <= 0 or reference_value <= 0:
+        return 0.0
+    return round(((reference_value - total_purchase_cost) / reference_value) * 100, 1)
 
 
-def calculate_expected_profit(
-    reference_median: float,
-    total_purchase_cost: float,
-) -> float:
-    """
-    현재 호가 중앙값에서 총 예상 구매금액을 뺀 단순 예상 차익.
-    판매 수수료와 한국 내 배송비는 아직 반영하지 않는다.
-    """
-    return round(reference_median - total_purchase_cost, 2)
+def calculate_spread(reference_value: float, total_purchase_cost: float) -> float:
+    """보수 시세와 총 매입원가의 단순 차이. 실제 순이익이 아니다."""
+    return round(reference_value - total_purchase_cost, 2)
 
 
 def classify_deal(
-    discount_percent: float,
-    expected_profit_usd: float,
+    *,
+    total_purchase_cost: float,
+    reference_median: float,
+    conservative_reference: float,
     sample_count: int,
+    authenticity_score: int,
+    tier: str,
+    settings: dict[str, Any],
 ) -> dict[str, Any]:
-    """
-    현재 호가 비교 기반의 임시 판정.
-    판매 완료 실거래가가 아니므로 과도한 확신은 금지한다.
-    """
-    if discount_percent < MIN_DISCOUNT_PERCENT:
-        return {
-            "should_alert": False,
-            "rating": "",
-            "label": "기준 미달",
-        }
+    """고가·인기 빈티지의 저평가 매물을 우선하는 판정 엔진."""
+    minimum_median = float(settings.get("minimum_reference_median_usd", 180))
+    minimum_samples = int(settings.get("minimum_reference_samples", 3))
 
-    if sample_count < 8:
+    if sample_count < minimum_samples:
         return {
             "should_alert": False,
             "rating": "",
             "label": "비교 표본 부족",
+            "discount_percent": 0.0,
+            "spread_usd": 0.0,
+            "confidence": "LOW",
         }
 
-    if discount_percent >= 50 and expected_profit_usd >= 100:
+    if reference_median < minimum_median:
         return {
-            "should_alert": True,
-            "rating": "★★★★★",
-            "label": "강력 검토",
+            "should_alert": False,
+            "rating": "",
+            "label": "시장가치 기준 미달",
+            "discount_percent": 0.0,
+            "spread_usd": 0.0,
+            "confidence": "LOW",
         }
 
-    if discount_percent >= 40 and expected_profit_usd >= 60:
+    discount = calculate_discount(total_purchase_cost, conservative_reference)
+    spread = calculate_spread(conservative_reference, total_purchase_cost)
+
+    confidence = "HIGH" if sample_count >= 8 else "MEDIUM" if sample_count >= 5 else "LOW"
+    extra_discount = 0.0
+    required_low_sample_spread = 0.0
+    if sample_count < 5:
+        extra_discount = float(settings.get("low_sample_extra_discount_percent", 10))
+        required_low_sample_spread = float(settings.get("low_sample_min_spread_usd", 140))
+
+    grail_ok = (
+        reference_median >= float(settings.get("grail_reference_median_usd", 300))
+        and discount >= float(settings.get("grail_min_discount_percent", 30)) + extra_discount
+        and spread >= max(
+            float(settings.get("grail_min_spread_usd", 120)),
+            required_low_sample_spread,
+        )
+    )
+
+    strong_ok = (
+        reference_median >= float(settings.get("strong_reference_median_usd", 240))
+        and discount >= float(settings.get("strong_min_discount_percent", 40)) + extra_discount
+        and spread >= max(
+            float(settings.get("strong_min_spread_usd", 100)),
+            required_low_sample_spread,
+        )
+    )
+
+    hidden_ok = (
+        reference_median >= float(settings.get("hidden_reference_median_usd", 180))
+        and discount >= float(settings.get("hidden_min_discount_percent", 50)) + extra_discount
+        and spread >= max(
+            float(settings.get("hidden_min_spread_usd", 90)),
+            required_low_sample_spread,
+        )
+    )
+
+    if grail_ok:
+        label = "GRAIL DEAL"
+        rating = "★★★★★"
+    elif strong_ok:
+        label = "STRONG BUY"
+        rating = "★★★★☆"
+    elif hidden_ok:
+        label = "HIDDEN GEM"
+        rating = "★★★★☆"
+    else:
         return {
-            "should_alert": True,
-            "rating": "★★★★☆",
-            "label": "우선 검토",
+            "should_alert": False,
+            "rating": "",
+            "label": "가치 대비 메리트 부족",
+            "discount_percent": discount,
+            "spread_usd": spread,
+            "confidence": confidence,
         }
+
+    if authenticity_score < 50:
+        return {
+            "should_alert": False,
+            "rating": "",
+            "label": "빈티지 근거 부족",
+            "discount_percent": discount,
+            "spread_usd": spread,
+            "confidence": confidence,
+        }
+
+    tier_bonus = {"tier_1": 20, "tier_2": 10, "tier_3": 0}.get(tier, 0)
+    hunter_score = round(
+        min(reference_median, 800) / 8
+        + min(discount, 70) * 1.5
+        + min(spread, 350) / 3
+        + authenticity_score / 3
+        + tier_bonus,
+        1,
+    )
 
     return {
         "should_alert": True,
-        "rating": "★★★☆☆",
-        "label": "검토 후보",
+        "rating": rating,
+        "label": label,
+        "discount_percent": discount,
+        "spread_usd": spread,
+        "confidence": confidence,
+        "hunter_score": hunter_score,
     }

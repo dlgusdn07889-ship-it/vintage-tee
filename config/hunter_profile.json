@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "era": {
+    "min_year": 1990,
+    "max_year": 1999,
+    "require_era_evidence": true,
+    "allow_strong_body_without_explicit_year": true
+  },
+  "budget": {
+    "max_item_plus_us_shipping_usd": 350,
+    "forwarding_fee_usd": 10
+  },
+  "search": {
+    "limit_per_query": 50,
+    "tier_1_artists_per_run": 4,
+    "tier_2_artists_per_run": 2,
+    "tier_3_artists_per_run": 1,
+    "fixed_detail_budget": 6,
+    "auction_detail_budget": 5,
+    "fixed_reference_budget": 6,
+    "auction_reference_budget": 5,
+    "max_alerts_per_run": 5,
+    "max_alerts_per_artist": 1,
+    "auction_max_hours_left": 24
+  },
+  "deal": {
+    "minimum_reference_median_usd": 250,
+    "minimum_reference_samples": 3,
+    "grail_reference_median_usd": 400,
+    "grail_min_discount_percent": 30,
+    "grail_min_spread_usd": 140,
+    "strong_reference_median_usd": 300,
+    "strong_min_discount_percent": 40,
+    "strong_min_spread_usd": 120,
+    "hidden_reference_median_usd": 250,
+    "hidden_min_discount_percent": 50,
+    "hidden_min_spread_usd": 110,
+    "low_sample_extra_discount_percent": 10,
+    "low_sample_min_spread_usd": 160
+  },
+  "authenticity": {
+    "minimum_score": 50,
+    "reject_no_tag": true,
+    "reject_variations": true,
+    "reject_modern_years": true,
+    "reject_modern_bodies": true
+  }
+}
