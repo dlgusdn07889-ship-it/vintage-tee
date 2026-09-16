@@ -42,7 +42,7 @@
     "minimum_score": 50,
     "reject_no_tag": true,
     "reject_variations": true,
-    "reject_modern_years": true,
+    "reject_modern_years": false,
     "reject_modern_bodies": true
   }
 }
