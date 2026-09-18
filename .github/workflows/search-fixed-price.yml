@@ -33,7 +33,7 @@ jobs:
           key: vintage-radar-fixed-${{ github.run_id }}
           restore-keys: |
             vintage-radar-fixed-
-      - name: 즉시구매 프리시전 헌터 실행
+      - name: 즉시구매 헌터 및 희귀 매물 검토 알림
         env:
           RADAR_MODE: FIXED_PRICE
           EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
@@ -42,7 +42,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           set -o pipefail
-          python scripts/hunter_v7.py | tee fixed_price_run.log
+          python scripts/hunter_runner.py | tee fixed_price_run.log
       - name: 즉시구매 진단 및 수동 검토 후보 저장
         if: always()
         uses: actions/upload-artifact@v4
