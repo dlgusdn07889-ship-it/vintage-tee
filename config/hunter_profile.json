@@ -1,5 +1,5 @@
 {
-  "version": 7,
+  "version": 8,
   "era": {
     "min_year": 1990,
     "max_year": 1999,
@@ -15,9 +15,9 @@
     "tier_1_artists_per_run": 4,
     "tier_2_artists_per_run": 2,
     "tier_3_artists_per_run": 1,
-    "fixed_detail_budget": 10,
+    "fixed_detail_budget": 12,
     "auction_detail_budget": 6,
-    "fixed_reference_budget": 5,
+    "fixed_reference_budget": 6,
     "auction_reference_budget": 3,
     "max_alerts_per_run": 3,
     "max_alerts_per_artist": 1,
@@ -25,7 +25,7 @@
   },
   "deal": {
     "minimum_reference_median_usd": 300,
-    "minimum_reference_samples": 3,
+    "minimum_reference_samples": 2,
     "grail_reference_median_usd": 400,
     "grail_min_discount_percent": 35,
     "grail_min_spread_usd": 150,
